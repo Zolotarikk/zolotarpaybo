@@ -195,3 +195,28 @@ async def cancel_booking(booking_id: int, user_id: int) -> bool:
         )
         await db.commit()
         return cursor.rowcount > 0
+    
+async def get_day_bookings(day: date):
+    """Активные записи на день: (id, клиент, username, услуга, начало, конец)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT b.id, u.full_name, u.username, s.name, b.start_at, b.end_at "
+            "FROM bookings b "
+            "JOIN services s ON s.id = b.service_id "
+            "LEFT JOIN users u ON u.user_id = b.user_id "
+            "WHERE b.status = 'active' AND b.start_at LIKE ? "
+            "ORDER BY b.start_at",
+            (f"{day.isoformat()}%",),
+        )
+        rows = await cursor.fetchall()
+    return [
+        (
+            booking_id,
+            full_name,
+            username,
+            service,
+            datetime.strptime(start, DT_FORMAT),
+            datetime.strptime(end, DT_FORMAT),
+        )
+        for booking_id, full_name, username, service, start, end in rows
+    ]

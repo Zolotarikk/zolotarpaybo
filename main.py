@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher
 
 import config
 import database
-from handlers import booking, common, fallback, my_bookings
+from handlers import admin, booking, common, fallback, my_bookings
 
 
 async def main():
@@ -17,7 +17,11 @@ async def main():
     dp = Dispatcher()
     # Порядок важен: fallback должен идти последним
     dp.include_routers(
-        common.router, booking.router, my_bookings.router, fallback.router
+        common.router,
+        booking.router,
+        my_bookings.router,
+        admin.router,
+        fallback.router,
     )
     await dp.start_polling(bot)
 

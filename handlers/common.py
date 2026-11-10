@@ -3,7 +3,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 
 import database
-from keyboards import main_menu
+from keyboards import main_menu_for
 
 router = Router()
 
@@ -15,7 +15,7 @@ async def cmd_start(message: Message):
     await message.answer(
         f"Здравствуйте, {user.full_name}! Это студия массажа «Релакс». "
         "Выберите раздел в меню ниже.",
-        reply_markup=main_menu,
+           reply_markup=main_menu_for(user.id),
     )
 
 
