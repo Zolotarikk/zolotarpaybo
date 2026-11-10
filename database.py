@@ -1,9 +1,13 @@
+from datetime import date, datetime
 from pathlib import Path
 
 import aiosqlite
 
 # Файл базы лежит рядом с кодом
 DB_PATH = Path(__file__).parent / "bot.db"
+
+# Формат времени, в котором храним записи в базе
+DT_FORMAT = "%Y-%m-%d %H:%M"
 
 # Демо-услуги: (название, длительность в минутах, цена в BYN)
 DEFAULT_SERVICES = [
@@ -34,6 +38,19 @@ async def init_db():
                 duration_min INTEGER NOT NULL,
                 price INTEGER NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bookings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                service_id INTEGER NOT NULL,
+                start_at TEXT NOT NULL,
+                end_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -68,3 +85,29 @@ async def get_services():
             "WHERE is_active = 1 ORDER BY id"
         )
         return await cursor.fetchall()
+
+
+async def get_service(service_id: int):
+    """Возвращает одну услугу или None, если её нет или она скрыта."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, name, duration_min, price FROM services "
+            "WHERE id = ? AND is_active = 1",
+            (service_id,),
+        )
+        return await cursor.fetchone()
+
+
+async def get_busy_intervals(day: date) -> list[tuple[datetime, datetime]]:
+    """Занятое время на выбранный день: список (начало, конец)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT start_at, end_at FROM bookings "
+            "WHERE status = 'active' AND start_at LIKE ?",
+            (f"{day.isoformat()}%",),
+        )
+        rows = await cursor.fetchall()
+    return [
+        (datetime.strptime(start, DT_FORMAT), datetime.strptime(end, DT_FORMAT))
+        for start, end in rows
+    ]
