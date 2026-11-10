@@ -14,6 +14,8 @@ from aiogram.types import (
 )
 from dotenv import load_dotenv
 
+import database
+
 # Читаем токен из файла .env
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -24,18 +26,19 @@ dp = Dispatcher()
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📖 О нас"), KeyboardButton(text="📞 Контакты")],
-        [KeyboardButton(text="🛒 Каталог")],
+        [KeyboardButton(text="🛒 Каталог"), KeyboardButton(text="📦 Мои заказы")],
     ],
-    resize_keyboard=True,  # делает кнопки компактными
+    resize_keyboard=True,
 )
 
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
-    """Срабатывает на /start и показывает меню"""
-    name = message.from_user.full_name
+    """Срабатывает на /start: запоминает пользователя и показывает меню"""
+    user = message.from_user
+    await database.add_user(user.id, user.full_name, user.username)
     await message.answer(
-        f"Привет, {name}! Выбери раздел в меню ниже.",
+        f"Привет, {user.full_name}! Выбери раздел в меню ниже.",
         reply_markup=main_menu,
     )
 
@@ -52,7 +55,6 @@ async def contacts(message: Message):
 
 @dp.message(F.text == "🛒 Каталог")
 async def catalog(message: Message):
-    # Inline-кнопки под сообщением
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Товар 1", callback_data="item_1")],
@@ -64,12 +66,27 @@ async def catalog(message: Message):
 
 @dp.callback_query(F.data.startswith("item_"))
 async def item_chosen(callback: CallbackQuery):
-    """Срабатывает при нажатии на inline-кнопку товара"""
-    item_id = callback.data.split("_")[1]
+    """Нажатие на товар: создаём заказ в базе"""
+    item_id = int(callback.data.split("_")[1])
+    order_id = await database.add_order(callback.from_user.id, item_id)
     await callback.message.answer(
-        f"Ты выбрал товар №{item_id}. Скоро здесь будет оформление заказа."
+        f"Заказ №{order_id} создан: товар №{item_id}."
     )
     await callback.answer()  # убирает «часики» на кнопке
+
+
+@dp.message(F.text == "📦 Мои заказы")
+async def my_orders(message: Message):
+    """Показывает последние заказы пользователя"""
+    orders = await database.get_orders(message.from_user.id)
+    if not orders:
+        await message.answer("У тебя пока нет заказов.")
+        return
+    lines = [
+        f"Заказ №{order_id}: товар №{item_id} ({created_at} UTC)"
+        for order_id, item_id, created_at in orders
+    ]
+    await message.answer("Твои последние заказы:\n" + "\n".join(lines))
 
 
 @dp.message()
@@ -82,6 +99,7 @@ async def main():
     if not TOKEN:
         raise RuntimeError("Не найден BOT_TOKEN. Проверь файл .env")
     logging.basicConfig(level=logging.INFO)
+    await database.init_db()  # создаём таблицы при запуске
     bot = Bot(token=TOKEN)
     await dp.start_polling(bot)
 
