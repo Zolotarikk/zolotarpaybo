@@ -17,6 +17,10 @@ DEFAULT_SERVICES = [
 ]
 
 
+def parse_dt(value: str) -> datetime:
+    return datetime.strptime(value, DT_FORMAT)
+
+
 async def init_db():
     """Создаёт таблицы, если их ещё нет. Вызывается при запуске бота."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -50,6 +54,16 @@ async def init_db():
                 start_at TEXT NOT NULL,
                 end_at TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS blocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                start_at TEXT NOT NULL,
+                end_at TEXT NOT NULL,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -99,18 +113,19 @@ async def get_service(service_id: int):
 
 
 async def get_busy_intervals(day: date) -> list[tuple[datetime, datetime]]:
-    """Занятое время на выбранный день: список (начало, конец)."""
+    """Занятое время на день: активные записи и закрытое владельцем время."""
+    pattern = f"{day.isoformat()}%"
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT start_at, end_at FROM bookings "
-            "WHERE status = 'active' AND start_at LIKE ?",
-            (f"{day.isoformat()}%",),
+            "WHERE status = 'active' AND start_at LIKE ? "
+            "UNION ALL "
+            "SELECT start_at, end_at FROM blocks WHERE start_at LIKE ?",
+            (pattern, pattern),
         )
         rows = await cursor.fetchall()
-    return [
-        (datetime.strptime(start, DT_FORMAT), datetime.strptime(end, DT_FORMAT))
-        for start, end in rows
-    ]
+    return [(parse_dt(start), parse_dt(end)) for start, end in rows]
+
 
 async def create_booking(
     user_id: int, service_id: int, start: datetime, end: datetime
@@ -121,12 +136,14 @@ async def create_booking(
     async with aiosqlite.connect(DB_PATH) as db:
         # Блокируем базу на запись, пока проверяем и сохраняем
         await db.execute("BEGIN IMMEDIATE")
-        # Пересечение: существующая запись начинается раньше нашего конца
-        # и заканчивается позже нашего начала
+        # Пересечение: существующая запись или блок начинается раньше нашего
+        # конца и заканчивается позже нашего начала
         cursor = await db.execute(
             "SELECT 1 FROM bookings "
-            "WHERE status = 'active' AND start_at < ? AND end_at > ? LIMIT 1",
-            (end_s, start_s),
+            "WHERE status = 'active' AND start_at < ? AND end_at > ? "
+            "UNION ALL "
+            "SELECT 1 FROM blocks WHERE start_at < ? AND end_at > ? LIMIT 1",
+            (end_s, start_s, end_s, start_s),
         )
         if await cursor.fetchone():
             await db.rollback()
@@ -138,7 +155,7 @@ async def create_booking(
         )
         await db.commit()
         return cursor.lastrowid
-    
+
 
 async def get_user_bookings(user_id: int, now: datetime):
     """Предстоящие активные записи клиента: (id, услуга, начало, конец)."""
@@ -152,12 +169,7 @@ async def get_user_bookings(user_id: int, now: datetime):
         )
         rows = await cursor.fetchall()
     return [
-        (
-            booking_id,
-            name,
-            datetime.strptime(start, DT_FORMAT),
-            datetime.strptime(end, DT_FORMAT),
-        )
+        (booking_id, name, parse_dt(start), parse_dt(end))
         for booking_id, name, start, end in rows
     ]
 
@@ -175,15 +187,8 @@ async def get_booking(booking_id: int):
     if row is None:
         return None
     bid, user_id, name, price, start, end, status = row
-    return (
-        bid,
-        user_id,
-        name,
-        price,
-        datetime.strptime(start, DT_FORMAT),
-        datetime.strptime(end, DT_FORMAT),
-        status,
-    )
+    return (bid, user_id, name, price, parse_dt(start), parse_dt(end), status)
+
 
 async def cancel_booking(booking_id: int, user_id: int) -> bool:
     """Отменяет запись клиента. Возвращает True, если отмена выполнена."""
@@ -195,7 +200,8 @@ async def cancel_booking(booking_id: int, user_id: int) -> bool:
         )
         await db.commit()
         return cursor.rowcount > 0
-    
+
+
 async def get_day_bookings(day: date):
     """Активные записи на день: (id, клиент, username, услуга, начало, конец)."""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -210,13 +216,62 @@ async def get_day_bookings(day: date):
         )
         rows = await cursor.fetchall()
     return [
-        (
-            booking_id,
-            full_name,
-            username,
-            service,
-            datetime.strptime(start, DT_FORMAT),
-            datetime.strptime(end, DT_FORMAT),
-        )
+        (booking_id, full_name, username, service, parse_dt(start), parse_dt(end))
         for booking_id, full_name, username, service, start, end in rows
     ]
+
+
+async def create_block(start: datetime, end: datetime):
+    """Закрывает время. Возвращает (id блока, []) или (None, [номера записей])."""
+    start_s = start.strftime(DT_FORMAT)
+    end_s = end.strftime(DT_FORMAT)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        # Нельзя закрыть время, в котором уже есть записи клиентов
+        cursor = await db.execute(
+            "SELECT id FROM bookings "
+            "WHERE status = 'active' AND start_at < ? AND end_at > ?",
+            (end_s, start_s),
+        )
+        conflicts = [row[0] for row in await cursor.fetchall()]
+        if conflicts:
+            await db.rollback()
+            return None, conflicts
+        cursor = await db.execute(
+            "INSERT INTO blocks (start_at, end_at) VALUES (?, ?)",
+            (start_s, end_s),
+        )
+        await db.commit()
+        return cursor.lastrowid, []
+
+
+async def get_day_blocks(day: date):
+    """Закрытое время на день: (id, начало, конец)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, start_at, end_at FROM blocks "
+            "WHERE start_at LIKE ? ORDER BY start_at",
+            (f"{day.isoformat()}%",),
+        )
+        rows = await cursor.fetchall()
+    return [(block_id, parse_dt(start), parse_dt(end)) for block_id, start, end in rows]
+
+
+async def get_future_blocks(now: datetime):
+    """Будущее закрытое время: (id, начало, конец), не более 20 штук."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, start_at, end_at FROM blocks "
+            "WHERE end_at > ? ORDER BY start_at LIMIT 20",
+            (now.strftime(DT_FORMAT),),
+        )
+        rows = await cursor.fetchall()
+    return [(block_id, parse_dt(start), parse_dt(end)) for block_id, start, end in rows]
+
+
+async def delete_block(block_id: int) -> bool:
+    """Открывает время обратно. Возвращает True, если блок был удалён."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
+        await db.commit()
+        return cursor.rowcount > 0

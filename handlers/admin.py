@@ -39,25 +39,30 @@ def panel_keyboard() -> InlineKeyboardMarkup:
             )
         ],
         [InlineKeyboardButton(text="🗓 Выбрать другую дату", callback_data="adm:dates")],
+        [InlineKeyboardButton(text="🚫 Закрыть время", callback_data="adm:bl")],
+        [InlineKeyboardButton(text="🔓 Закрытое время", callback_data="adm:ul")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def render_day(callback: CallbackQuery, day: date):
-    """Показывает записи на выбранный день с кнопками отмены."""
+    """Показывает записи и закрытое время на день, с кнопками отмены."""
     bookings = await database.get_day_bookings(day)
-    lines = [f"📅 {format_day(day)}\n"]
+    blocks = await database.get_day_blocks(day)
+
+    entries = []  # (время начала, текст) для сортировки по времени
     rows = []
-    if not bookings:
-        lines.append("Записей нет.")
     for booking_id, full_name, username, service, start, end in bookings:
         who = full_name or "Клиент"
         if username:
             who += f" (@{username})"
-        lines.append(
-            f"🕒 {start:%H:%M}–{end:%H:%M} · №{booking_id}\n"
-            f"💆 {service}\n"
-            f"👤 {who}\n"
+        entries.append(
+            (
+                start,
+                f"🕒 {start:%H:%M}–{end:%H:%M} · №{booking_id}\n"
+                f"💆 {service}\n"
+                f"👤 {who}\n",
+            )
         )
         rows.append(
             [
@@ -67,6 +72,14 @@ async def render_day(callback: CallbackQuery, day: date):
                 )
             ]
         )
+    for _block_id, start, end in blocks:
+        entries.append((start, f"🚫 {start:%H:%M}–{end:%H:%M} · закрыто\n"))
+    entries.sort(key=lambda item: item[0])
+
+    lines = [f"📅 {format_day(day)}\n"]
+    if not entries:
+        lines.append("Записей и закрытого времени нет.")
+    lines += [text for _, text in entries]
     rows.append([InlineKeyboardButton(text="⬅ В админ-панель", callback_data="adm:menu")])
     await callback.message.edit_text(
         "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
