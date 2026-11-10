@@ -250,8 +250,3 @@ async def confirm_booking(callback: CallbackQuery):
     await notify_admin(
         callback.bot, callback.from_user, booking_id, name, price, start, end
     )
-
-
-@router.message(F.text == "📋 Мои записи")
-async def coming_soon(message: Message):
-    await message.answer("Этот раздел скоро появится.")

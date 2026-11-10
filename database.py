@@ -138,3 +138,60 @@ async def create_booking(
         )
         await db.commit()
         return cursor.lastrowid
+    
+
+async def get_user_bookings(user_id: int, now: datetime):
+    """Предстоящие активные записи клиента: (id, услуга, начало, конец)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT b.id, s.name, b.start_at, b.end_at "
+            "FROM bookings b JOIN services s ON s.id = b.service_id "
+            "WHERE b.user_id = ? AND b.status = 'active' AND b.start_at >= ? "
+            "ORDER BY b.start_at LIMIT 10",
+            (user_id, now.strftime(DT_FORMAT)),
+        )
+        rows = await cursor.fetchall()
+    return [
+        (
+            booking_id,
+            name,
+            datetime.strptime(start, DT_FORMAT),
+            datetime.strptime(end, DT_FORMAT),
+        )
+        for booking_id, name, start, end in rows
+    ]
+
+
+async def get_booking(booking_id: int):
+    """Одна запись: (id, user_id, услуга, цена, начало, конец, статус) или None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT b.id, b.user_id, s.name, s.price, b.start_at, b.end_at, b.status "
+            "FROM bookings b JOIN services s ON s.id = b.service_id "
+            "WHERE b.id = ?",
+            (booking_id,),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    bid, user_id, name, price, start, end, status = row
+    return (
+        bid,
+        user_id,
+        name,
+        price,
+        datetime.strptime(start, DT_FORMAT),
+        datetime.strptime(end, DT_FORMAT),
+        status,
+    )
+
+async def cancel_booking(booking_id: int, user_id: int) -> bool:
+    """Отменяет запись клиента. Возвращает True, если отмена выполнена."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE bookings SET status = 'cancelled' "
+            "WHERE id = ? AND user_id = ? AND status = 'active'",
+            (booking_id, user_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
