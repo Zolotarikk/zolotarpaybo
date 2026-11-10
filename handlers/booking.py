@@ -1,4 +1,5 @@
-from datetime import date, datetime
+import logging
+from datetime import date, datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.types import (
@@ -8,10 +9,12 @@ from aiogram.types import (
     Message,
 )
 
+import config
 import database
 import timetable
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
@@ -61,6 +64,54 @@ def slots_keyboard(service_id: int, day: date, slots: list[datetime]):
     # «Назад» возвращает к выбору даты для этой же услуги
     back = [InlineKeyboardButton(text="⬅ Назад", callback_data=f"svc:{service_id}")]
     return InlineKeyboardMarkup(inline_keyboard=chunk(buttons, 4) + [back])
+
+
+def confirm_keyboard(service_id: int, day: date, hhmm: str) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="✅ Подтвердить",
+                callback_data=f"confirm:{service_id}:{day.isoformat()}:{hhmm}",
+            )
+        ],
+        # «Назад» возвращает к выбору времени на этот же день
+        [
+            InlineKeyboardButton(
+                text="⬅ Назад",
+                callback_data=f"date:{service_id}:{day.isoformat()}",
+            )
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def show_slot_taken(callback: CallbackQuery, service_id: int):
+    """Сообщает, что выбранное время уже недоступно, и предлагает другую дату."""
+    await callback.message.edit_text(
+        "К сожалению, это время уже занято. Выберите другую дату:",
+        reply_markup=dates_keyboard(service_id),
+    )
+    await callback.answer()
+
+
+async def notify_admin(bot, user, booking_id, name, price, start, end):
+    """Отправляет владельцу студии уведомление о новой записи."""
+    if not config.ADMIN_ID:
+        logger.warning("ADMIN_ID не задан, уведомление не отправлено")
+        return
+    username = f" (@{user.username})" if user.username else ""
+    text = (
+        f"🔔 Новая запись №{booking_id}\n\n"
+        f"👤 {user.full_name}{username}\n"
+        f"💆 {name}, {price} BYN\n"
+        f"📅 {format_day(start.date())}\n"
+        f"🕒 {start:%H:%M}–{end:%H:%M}"
+    )
+    try:
+        await bot.send_message(config.ADMIN_ID, text)
+    except Exception:
+        # Запись уже сохранена, сбой уведомления не должен её ломать
+        logger.exception("Не удалось отправить уведомление администратору")
 
 
 @router.message(F.text == "💰 Услуги и цены")
@@ -140,21 +191,65 @@ async def choose_date(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("slot:"))
 async def choose_slot(callback: CallbackQuery):
     _, service_id, day_str, hhmm = callback.data.split(":")
-    service = await database.get_service(int(service_id))
+    service_id = int(service_id)
+    service = await database.get_service(service_id)
     if service is None:
         await callback.answer("Эта услуга недоступна", show_alert=True)
         return
     _, name, duration, price = service
     start = datetime.strptime(f"{day_str} {hhmm}", "%Y-%m-%d %H%M")
+    end = start + timedelta(minutes=duration)
 
     await callback.message.edit_text(
-        "Вы выбрали:\n"
-        f"💆 {name} ({duration} мин, {price} BYN)\n"
+        "Проверьте данные записи:\n\n"
+        f"💆 {name} ({duration} мин)\n"
         f"📅 {format_day(start.date())}\n"
-        f"🕒 {start.strftime('%H:%M')}\n\n"
-        "Подтверждение записи добавим на следующем шаге."
+        f"🕒 {start:%H:%M}–{end:%H:%M}\n"
+        f"💰 {price} BYN",
+        reply_markup=confirm_keyboard(service_id, start.date(), hhmm),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("confirm:"))
+async def confirm_booking(callback: CallbackQuery):
+    _, service_id, day_str, hhmm = callback.data.split(":")
+    service_id = int(service_id)
+    service = await database.get_service(service_id)
+    if service is None:
+        await callback.answer("Эта услуга недоступна", show_alert=True)
+        return
+    _, name, duration, price = service
+    start = datetime.strptime(f"{day_str} {hhmm}", "%Y-%m-%d %H%M")
+    end = start + timedelta(minutes=duration)
+
+    # Защита 1: время всё ещё допустимо (не прошло, в рабочие часы, не занято)
+    busy = await database.get_busy_intervals(start.date())
+    if start not in timetable.free_slots(start.date(), duration, busy):
+        await show_slot_taken(callback, service_id)
+        return
+
+    # Защита 2: проверка и сохранение в одной транзакции
+    booking_id = await database.create_booking(
+        callback.from_user.id, service_id, start, end
+    )
+    if booking_id is None:
+        await show_slot_taken(callback, service_id)
+        return
+
+    await callback.message.edit_text(
+        f"✅ Вы записаны! Запись №{booking_id}\n\n"
+        f"💆 {name} ({duration} мин)\n"
+        f"📅 {format_day(start.date())}\n"
+        f"🕒 {start:%H:%M}–{end:%H:%M}\n"
+        f"💰 {price} BYN\n\n"
+        "Отменить запись можно в разделе «📋 Мои записи»."
+    )
+    await callback.answer()
+
+    await notify_admin(
+        callback.bot, callback.from_user, booking_id, name, price, start, end
+    )
 
 
 @router.message(F.text == "📋 Мои записи")

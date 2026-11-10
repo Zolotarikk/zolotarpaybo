@@ -111,3 +111,30 @@ async def get_busy_intervals(day: date) -> list[tuple[datetime, datetime]]:
         (datetime.strptime(start, DT_FORMAT), datetime.strptime(end, DT_FORMAT))
         for start, end in rows
     ]
+
+async def create_booking(
+    user_id: int, service_id: int, start: datetime, end: datetime
+) -> int | None:
+    """Создаёт запись, если время свободно. Возвращает номер записи или None."""
+    start_s = start.strftime(DT_FORMAT)
+    end_s = end.strftime(DT_FORMAT)
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Блокируем базу на запись, пока проверяем и сохраняем
+        await db.execute("BEGIN IMMEDIATE")
+        # Пересечение: существующая запись начинается раньше нашего конца
+        # и заканчивается позже нашего начала
+        cursor = await db.execute(
+            "SELECT 1 FROM bookings "
+            "WHERE status = 'active' AND start_at < ? AND end_at > ? LIMIT 1",
+            (end_s, start_s),
+        )
+        if await cursor.fetchone():
+            await db.rollback()
+            return None
+        cursor = await db.execute(
+            "INSERT INTO bookings (user_id, service_id, start_at, end_at) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, service_id, start_s, end_s),
+        )
+        await db.commit()
+        return cursor.lastrowid
