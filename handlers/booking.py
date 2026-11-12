@@ -231,7 +231,7 @@ async def confirm_booking(callback: CallbackQuery):
 
     # Защита 2: проверка и сохранение в одной транзакции
     booking_id = await database.create_booking(
-        callback.from_user.id, service_id, start, end
+    callback.from_user.id, service_id, start, end, timetable.now_local()
     )
     if booking_id is None:
         await show_slot_taken(callback, service_id)

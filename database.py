@@ -1,13 +1,18 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import aiosqlite
+
+import config
 
 # Файл базы лежит рядом с кодом
 DB_PATH = Path(__file__).parent / "bot.db"
 
 # Формат времени, в котором храним записи в базе
 DT_FORMAT = "%Y-%m-%d %H:%M"
+
+# Колонки-отметки «напоминание отправлено» (название берём из этого списка)
+REMINDER_COLUMNS = {"24h": "reminded_24h", "2h": "reminded_2h"}
 
 # Демо-услуги: (название, длительность в минутах, цена в BYN)
 DEFAULT_SERVICES = [
@@ -68,6 +73,15 @@ async def init_db():
             )
             """
         )
+                # Миграция: добавляем колонки напоминаний в таблицу bookings, если их нет
+        cursor = await db.execute("PRAGMA table_info(bookings)")
+        existing_columns = {row[1] for row in await cursor.fetchall()}
+        for column in REMINDER_COLUMNS.values():
+            if column not in existing_columns:
+                await db.execute(
+                    f"ALTER TABLE bookings "
+                    f"ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+                )
         # Если услуг ещё нет, заполняем демо-списком
         cursor = await db.execute("SELECT COUNT(*) FROM services")
         (count,) = await cursor.fetchone()
@@ -128,11 +142,15 @@ async def get_busy_intervals(day: date) -> list[tuple[datetime, datetime]]:
 
 
 async def create_booking(
-    user_id: int, service_id: int, start: datetime, end: datetime
+    user_id: int, service_id: int, start: datetime, end: datetime, now: datetime
 ) -> int | None:
     """Создаёт запись, если время свободно. Возвращает номер записи или None."""
     start_s = start.strftime(DT_FORMAT)
     end_s = end.strftime(DT_FORMAT)
+    # Если до записи осталось меньше срока напоминания, оно уже не нужно
+    until_start = start - now
+    skip_first = int(until_start <= timedelta(hours=config.REMIND_FIRST_HOURS))
+    skip_second = int(until_start <= timedelta(hours=config.REMIND_SECOND_HOURS))
     async with aiosqlite.connect(DB_PATH) as db:
         # Блокируем базу на запись, пока проверяем и сохраняем
         await db.execute("BEGIN IMMEDIATE")
@@ -149,9 +167,10 @@ async def create_booking(
             await db.rollback()
             return None
         cursor = await db.execute(
-            "INSERT INTO bookings (user_id, service_id, start_at, end_at) "
-            "VALUES (?, ?, ?, ?)",
-            (user_id, service_id, start_s, end_s),
+            "INSERT INTO bookings "
+            "(user_id, service_id, start_at, end_at, reminded_24h, reminded_2h) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, service_id, start_s, end_s, skip_first, skip_second),
         )
         await db.commit()
         return cursor.lastrowid
@@ -275,3 +294,37 @@ async def delete_block(block_id: int) -> bool:
         cursor = await db.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
         await db.commit()
         return cursor.rowcount > 0
+    
+async def get_due_reminders(now: datetime, kind: str, hours: int):
+    """Записи, которым пора отправить напоминание.
+
+    Возвращает (id, user_id, услуга, начало, конец).
+    """
+    # Название колонки в запрос через ? подставить нельзя, поэтому берём
+    # его из заранее заданного словаря
+    column = REMINDER_COLUMNS[kind]
+    until = now + timedelta(hours=hours)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT b.id, b.user_id, s.name, b.start_at, b.end_at "
+            "FROM bookings b JOIN services s ON s.id = b.service_id "
+            f"WHERE b.status = 'active' AND b.{column} = 0 "
+            "AND b.start_at > ? AND b.start_at <= ? "
+            "ORDER BY b.start_at",
+            (now.strftime(DT_FORMAT), until.strftime(DT_FORMAT)),
+        )
+        rows = await cursor.fetchall()
+    return [
+        (booking_id, user_id, name, parse_dt(start), parse_dt(end))
+        for booking_id, user_id, name, start, end in rows
+    ]
+
+
+async def mark_reminded(booking_id: int, kind: str):
+    """Отмечает, что напоминание по записи отправлено."""
+    column = REMINDER_COLUMNS[kind]
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            f"UPDATE bookings SET {column} = 1 WHERE id = ?", (booking_id,)
+        )
+        await db.commit()

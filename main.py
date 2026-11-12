@@ -5,6 +5,7 @@ from aiogram import Bot, Dispatcher
 
 import config
 import database
+import reminders
 from handlers import admin, admin_blocks, booking, common, fallback, my_bookings
 
 
@@ -24,7 +25,12 @@ async def main():
         admin_blocks.router,
         fallback.router,
     )
-    await dp.start_polling(bot)
+    # Фоновая задача напоминаний работает параллельно с ботом
+    reminders_task = asyncio.create_task(reminders.reminder_loop(bot))
+    try:
+        await dp.start_polling(bot)
+    finally:
+        reminders_task.cancel()
 
 
 if __name__ == "__main__":

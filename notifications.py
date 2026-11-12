@@ -16,10 +16,10 @@ async def send_to_admin(bot, text: str):
         logger.exception("Не удалось отправить уведомление администратору")
 
 
-async def send_to_user(bot, user_id: int, text: str) -> bool:
+async def send_to_user(bot, user_id: int, text: str, reply_markup=None) -> bool:
     """Отправляет сообщение клиенту. Возвращает True, если оно доставлено."""
     try:
-        await bot.send_message(user_id, text)
+        await bot.send_message(user_id, text, reply_markup=reply_markup)
         return True
     except Exception:
         # Например, клиент заблокировал бота
