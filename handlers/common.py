@@ -2,6 +2,7 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 
+import config
 import database
 from keyboards import main_menu_for
 
@@ -13,9 +14,11 @@ async def cmd_start(message: Message):
     user = message.from_user
     await database.add_user(user.id, user.full_name, user.username)
     await message.answer(
-        f"Здравствуйте, {user.full_name}! Это студия массажа «Релакс». "
-        "Выберите раздел в меню ниже.",
-           reply_markup=main_menu_for(user.id),
+        f"Здравствуйте, {user.full_name}! 👋\n\n"
+        f"Это бот онлайн-записи: {config.STUDIO_NAME}.\n"
+        "Выберите услугу, удобное время и запишитесь за минуту. "
+        "Всё остальное в меню ниже.",
+        reply_markup=main_menu_for(user.id),
     )
 
 
@@ -26,16 +29,13 @@ async def cmd_id(message: Message):
 
 @router.message(F.text == "📖 О нас")
 async def about(message: Message):
-    await message.answer(
-        "Студия массажа «Релакс». Работаем с 2020 года. "
-        "Здесь будет описание студии."
-    )
+    await message.answer(f"{config.STUDIO_NAME}\n\n{config.STUDIO_ABOUT}")
 
 
 @router.message(F.text == "📞 Контакты")
 async def contacts(message: Message):
     await message.answer(
-        "Телефон: +375 00 000 00 00\n"
-        "Адрес: г. Минск, тестовая улица, 1\n"
-        "Работаем: пн–сб, 10:00–20:00"
+        f"📍 {config.STUDIO_ADDRESS}\n"
+        f"📞 {config.STUDIO_PHONE}\n"
+        f"🕒 {config.STUDIO_HOURS}"
     )

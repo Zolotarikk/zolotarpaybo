@@ -22,7 +22,8 @@ async def send_reminders(bot, kind: str, hours: int):
         details = (
             f"№{booking_id}: {name}\n"
             f"📅 {format_day(start.date())}\n"
-            f"🕒 {start:%H:%M}–{end:%H:%M}"
+            f"🕒 {start:%H:%M}–{end:%H:%M}\n"
+            f"📍 {config.STUDIO_ADDRESS}"
         )
         if kind == "24h":
             text = (

@@ -2,11 +2,32 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.types import BotCommand, BotCommandScopeChat
 
 import config
 import database
 import reminders
 from handlers import admin, admin_blocks, booking, common, fallback, my_bookings
+
+logger = logging.getLogger(__name__)
+
+
+async def setup_commands(bot: Bot):
+    """Меню команд рядом с полем ввода. Сбой здесь не должен мешать запуску."""
+    try:
+        await bot.set_my_commands(
+            [BotCommand(command="start", description="Главное меню")]
+        )
+        if config.ADMIN_ID:
+            await bot.set_my_commands(
+                [
+                    BotCommand(command="start", description="Главное меню"),
+                    BotCommand(command="admin", description="Админ-панель"),
+                ],
+                scope=BotCommandScopeChat(chat_id=config.ADMIN_ID),
+            )
+    except Exception:
+        logger.warning("Не удалось настроить меню команд", exc_info=True)
 
 
 async def main():
@@ -25,6 +46,7 @@ async def main():
         admin_blocks.router,
         fallback.router,
     )
+    await setup_commands(bot)
     # Фоновая задача напоминаний работает параллельно с ботом
     reminders_task = asyncio.create_task(reminders.reminder_loop(bot))
     try:

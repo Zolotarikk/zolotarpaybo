@@ -242,7 +242,8 @@ async def confirm_booking(callback: CallbackQuery):
         f"💆 {name} ({duration} мин)\n"
         f"📅 {format_day(start.date())}\n"
         f"🕒 {start:%H:%M}–{end:%H:%M}\n"
-        f"💰 {price} BYN\n\n"
+        f"💰 {price} BYN\n"
+        f"📍 {config.STUDIO_ADDRESS}\n\n"
         "Отменить запись можно в разделе «📋 Мои записи»."
     )
     await callback.answer()
