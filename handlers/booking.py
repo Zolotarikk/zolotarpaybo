@@ -42,8 +42,20 @@ def chunk(buttons: list, size: int) -> list[list]:
     return [buttons[i : i + size] for i in range(0, len(buttons), size)]
 
 
-def services_keyboard(services) -> InlineKeyboardMarkup:
-    rows = [
+def services_keyboard(services, last_service=None) -> InlineKeyboardMarkup:
+    rows = []
+    if last_service:
+        # Быстрая кнопка: услуга из прошлой записи клиента
+        last_id, last_name = last_service
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"⚡ Как в прошлый раз: {last_name}",
+                    callback_data=f"svc:{last_id}",
+                )
+            ]
+        )
+    rows += [
         [
             InlineKeyboardButton(
                 text=f"{name} · {duration} мин · {price} BYN",
@@ -53,6 +65,19 @@ def services_keyboard(services) -> InlineKeyboardMarkup:
         for service_id, name, duration, price in services
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def calendar_keyboard(booking_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📅 Добавить в календарь",
+                    callback_data=f"ics:{booking_id}",
+                )
+            ]
+        ]
+    )
 
 
 def dates_keyboard(service_id: int) -> InlineKeyboardMarkup:
@@ -152,16 +177,22 @@ async def start_booking(message: Message):
     if not services:
         await message.answer("Список услуг пока пуст.")
         return
+    last_service = await database.get_last_service(message.from_user.id)
     await message.answer(
-        SERVICE_PROMPT, reply_markup=services_keyboard(services), parse_mode=HTML
+        SERVICE_PROMPT,
+        reply_markup=services_keyboard(services, last_service),
+        parse_mode=HTML,
     )
 
 
 @router.callback_query(F.data == "back:services")
 async def back_to_services(callback: CallbackQuery):
     services = await database.get_services()
+    last_service = await database.get_last_service(callback.from_user.id)
     await callback.message.edit_text(
-        SERVICE_PROMPT, reply_markup=services_keyboard(services), parse_mode=HTML
+        SERVICE_PROMPT,
+        reply_markup=services_keyboard(services, last_service),
+        parse_mode=HTML,
     )
     await callback.answer()
 
@@ -277,6 +308,7 @@ async def confirm_booking(callback: CallbackQuery):
         f"📍 {escape(config.STUDIO_ADDRESS)}\n\n"
         "Мы напомним о записи заранее. Посмотреть или отменить её можно "
         "в разделе «📋 Мои записи».",
+        reply_markup=calendar_keyboard(booking_id),
         parse_mode=HTML,
     )
     await callback.answer()

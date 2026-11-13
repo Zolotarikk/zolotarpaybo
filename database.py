@@ -110,16 +110,21 @@ async def get_service(service_id: int):
         return await cursor.fetchone()
 
 
-async def get_busy_intervals(day: date) -> list[tuple[datetime, datetime]]:
-    """Занятое время на день: активные записи и закрытое владельцем время."""
+async def get_busy_intervals(
+    day: date, exclude_booking_id: int = 0
+) -> list[tuple[datetime, datetime]]:
+    """Занятое время на день: активные записи и закрытое владельцем время.
+
+    exclude_booking_id: запись, которую не учитываем (при её переносе).
+    """
     pattern = f"{day.isoformat()}%"
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             "SELECT start_at, end_at FROM bookings "
-            "WHERE status = 'active' AND start_at LIKE ? "
+            "WHERE status = 'active' AND start_at LIKE ? AND id != ? "
             "UNION ALL "
             "SELECT start_at, end_at FROM blocks WHERE start_at LIKE ?",
-            (pattern, pattern),
+            (pattern, exclude_booking_id, pattern),
         )
         rows = await cursor.fetchall()
     return [(parse_dt(start), parse_dt(end)) for start, end in rows]
@@ -342,3 +347,56 @@ async def sync_services(services: list[dict]):
                     "UPDATE services SET is_active = 0 WHERE id = ?", (service_id,)
                 )
         await db.commit()
+        
+
+async def get_last_service(user_id: int):
+    """Услуга последней записи клиента: (id, название) или None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT s.id, s.name FROM bookings b "
+            "JOIN services s ON s.id = b.service_id "
+            "WHERE b.user_id = ? AND s.is_active = 1 "
+            "ORDER BY b.id DESC LIMIT 1",
+            (user_id,),
+        )
+        return await cursor.fetchone()
+
+
+async def move_booking(
+    booking_id: int, user_id: int, start: datetime, end: datetime, now: datetime
+) -> bool:
+    """Переносит запись клиента на новое время. True, если перенос выполнен."""
+    start_s = start.strftime(DT_FORMAT)
+    end_s = end.strftime(DT_FORMAT)
+    until_start = start - now
+    skip_first = int(until_start <= timedelta(hours=config.REMIND_FIRST_HOURS))
+    skip_second = int(until_start <= timedelta(hours=config.REMIND_SECOND_HOURS))
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        # Запись должна существовать, принадлежать клиенту и быть активной
+        cursor = await db.execute(
+            "SELECT 1 FROM bookings "
+            "WHERE id = ? AND user_id = ? AND status = 'active'",
+            (booking_id, user_id),
+        )
+        if not await cursor.fetchone():
+            await db.rollback()
+            return False
+        # Новое время не должно пересекаться с другими записями и закрытым временем
+        cursor = await db.execute(
+            "SELECT 1 FROM bookings "
+            "WHERE status = 'active' AND id != ? AND start_at < ? AND end_at > ? "
+            "UNION ALL "
+            "SELECT 1 FROM blocks WHERE start_at < ? AND end_at > ? LIMIT 1",
+            (booking_id, end_s, start_s, end_s, start_s),
+        )
+        if await cursor.fetchone():
+            await db.rollback()
+            return False
+        await db.execute(
+            "UPDATE bookings SET start_at = ?, end_at = ?, "
+            "reminded_24h = ?, reminded_2h = ? WHERE id = ?",
+            (start_s, end_s, skip_first, skip_second, booking_id),
+        )
+        await db.commit()
+        return True

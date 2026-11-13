@@ -37,9 +37,13 @@ async def render_my_bookings(user_id: int):
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"❌ Отменить №{booking_id} ({start:%d.%m %H:%M})",
+                    text=f"🔁 Перенести №{booking_id}",
+                    callback_data=f"mv:{booking_id}",
+                ),
+                InlineKeyboardButton(
+                    text=f"❌ Отменить №{booking_id}",
                     callback_data=f"cancel:{booking_id}",
-                )
+                ),
             ]
         )
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)

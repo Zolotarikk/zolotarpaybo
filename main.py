@@ -8,7 +8,16 @@ from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent
 import config
 import database
 import reminders
-from handlers import admin, admin_blocks, booking, common, fallback, my_bookings
+from handlers import (
+    admin,
+    admin_blocks,
+    booking,
+    calendar_ics,
+    common,
+    fallback,
+    my_bookings,
+    reschedule,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +92,8 @@ async def main():
         my_bookings.router,
         admin.router,
         admin_blocks.router,
+        reschedule.router,
+        calendar_ics.router,
         fallback.router,
     )
     await setup_commands(bot)
