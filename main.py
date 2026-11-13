@@ -2,7 +2,8 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-from aiogram.types import BotCommand, BotCommandScopeChat
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent
 
 import config
 import database
@@ -30,6 +31,39 @@ async def setup_commands(bot: Bot):
         logger.warning("Не удалось настроить меню команд", exc_info=True)
 
 
+def register_error_handler(dp: Dispatcher):
+    """Единое место обработки ошибок: пользователь не видит «тишины»."""
+
+    @dp.error()
+    async def on_error(event: ErrorEvent):
+        error = event.exception
+        query = event.update.callback_query
+        message = event.update.message
+
+        # Двойное нажатие на ту же кнопку: Telegram не даёт изменить сообщение
+        # на такое же. Это не ошибка, просто игнорируем
+        if isinstance(error, TelegramBadRequest) and "message is not modified" in str(
+            error
+        ):
+            if query:
+                try:
+                    await query.answer()
+                except Exception:
+                    pass
+            return True
+
+        logger.error("Необработанная ошибка", exc_info=error)
+        text = "Что-то пошло не так. Попробуйте ещё раз или нажмите /start."
+        try:
+            if query:
+                await query.answer(text, show_alert=True)
+            elif message:
+                await message.answer(text)
+        except Exception:
+            logger.warning("Не удалось сообщить пользователю об ошибке")
+        return True
+
+
 async def main():
     if not config.BOT_TOKEN:
         raise RuntimeError(
@@ -41,6 +75,7 @@ async def main():
     await database.sync_services(config.SERVICES)
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher()
+    register_error_handler(dp)
     # Порядок важен: fallback должен идти последним
     dp.include_routers(
         common.router,

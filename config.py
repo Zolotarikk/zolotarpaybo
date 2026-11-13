@@ -49,3 +49,11 @@ REMIND_SECOND_HOURS = _rules["remind_second_hours"]
 
 # Список услуг: [{"name": ..., "duration_min": ..., "price": ...}, ...]
 SERVICES = _settings["services"]
+
+# Необязательные настройки оформления
+_photo = _studio.get("welcome_photo")
+WELCOME_PHOTO = CLIENT_DIR / _photo if _photo else None
+STUDIO_LATITUDE = _studio.get("latitude")
+STUDIO_LONGITUDE = _studio.get("longitude")
+# Описания услуг для клиентов: {название: описание}
+SERVICE_DESCRIPTIONS = {item["name"]: item.get("description", "") for item in SERVICES}
