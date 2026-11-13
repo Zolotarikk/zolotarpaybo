@@ -1,28 +1,18 @@
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
 import aiosqlite
 
 import config
 
 # Файл базы лежит рядом с кодом
-DB_PATH = Path(__file__).parent / "bot.db"
+# У каждого клиента своя база в его папке: clients/<имя>/bot.db
+DB_PATH = config.CLIENT_DIR / "bot.db"
 
 # Формат времени, в котором храним записи в базе
 DT_FORMAT = "%Y-%m-%d %H:%M"
 
 # Колонки-отметки «напоминание отправлено» (название берём из этого списка)
 REMINDER_COLUMNS = {"24h": "reminded_24h", "2h": "reminded_2h"}
-
-# Демо-услуги: (название, длительность в минутах, цена в BYN)
-DEFAULT_SERVICES = [
-    ("Массаж спины", 30, 35),
-    ("Массаж шеи и плеч", 30, 30),
-    ("Классический массаж", 60, 60),
-    ("Антицеллюлитный массаж", 60, 65),
-    ("Расслабляющий массаж", 90, 85),
-]
-
 
 def parse_dt(value: str) -> datetime:
     return datetime.strptime(value, DT_FORMAT)
@@ -84,15 +74,7 @@ async def init_db():
                     f"ALTER TABLE bookings "
                     f"ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
                 )
-        # Если услуг ещё нет, заполняем демо-списком
-        cursor = await db.execute("SELECT COUNT(*) FROM services")
-        (count,) = await cursor.fetchone()
-        if count == 0:
-            await db.executemany(
-                "INSERT INTO services (name, duration_min, price) "
-                "VALUES (?, ?, ?)",
-                DEFAULT_SERVICES,
-            )
+        
         await db.commit()
 
 
@@ -329,4 +311,34 @@ async def mark_reminded(booking_id: int, kind: str):
         await db.execute(
             f"UPDATE bookings SET {column} = 1 WHERE id = ?", (booking_id,)
         )
+        await db.commit()
+        
+async def sync_services(services: list[dict]):
+    """Приводит услуги в базе в соответствие со списком из settings.toml."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT id, name FROM services")
+        existing = {name: service_id for service_id, name in await cursor.fetchall()}
+        names_in_settings = set()
+        for item in services:
+            name = item["name"]
+            names_in_settings.add(name)
+            if name in existing:
+                # Услуга уже есть: обновляем длительность и цену, включаем
+                await db.execute(
+                    "UPDATE services SET duration_min = ?, price = ?, is_active = 1 "
+                    "WHERE id = ?",
+                    (item["duration_min"], item["price"], existing[name]),
+                )
+            else:
+                await db.execute(
+                    "INSERT INTO services (name, duration_min, price) VALUES (?, ?, ?)",
+                    (name, item["duration_min"], item["price"]),
+                )
+        # Услуги, которых больше нет в настройках, скрываем, а не удаляем:
+        # старые записи клиентов продолжают на них ссылаться
+        for name, service_id in existing.items():
+            if name not in names_in_settings:
+                await db.execute(
+                    "UPDATE services SET is_active = 0 WHERE id = ?", (service_id,)
+                )
         await db.commit()

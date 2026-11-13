@@ -32,9 +32,13 @@ async def setup_commands(bot: Bot):
 
 async def main():
     if not config.BOT_TOKEN:
-        raise RuntimeError("Не найден BOT_TOKEN. Проверь файл .env")
+        raise RuntimeError(
+            f"Не найден BOT_TOKEN. Проверь файл {config.CLIENT_DIR / '.env'}"
+        )
     logging.basicConfig(level=logging.INFO)
+    logger.info("Запуск клиента: %s", config.CLIENT)
     await database.init_db()
+    await database.sync_services(config.SERVICES)
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher()
     # Порядок важен: fallback должен идти последним

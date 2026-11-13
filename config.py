@@ -1,33 +1,51 @@
+import argparse
 import os
+import tomllib
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+BASE_DIR = Path(__file__).parent
 
+# Какого клиента запускаем: python main.py --client demo
+# (или переменная окружения CLIENT; по умолчанию demo)
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--client", default=os.getenv("CLIENT", "demo"))
+CLIENT = _parser.parse_known_args()[0].client
+CLIENT_DIR = BASE_DIR / "clients" / CLIENT
+
+if not CLIENT_DIR.is_dir():
+    raise SystemExit(f"Папка клиента не найдена: {CLIENT_DIR}")
+
+# Секреты (токен бота, ID владельца) лежат в .env внутри папки клиента
+load_dotenv(CLIENT_DIR / ".env")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# Telegram ID администратора (владельца студии)
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# --- Расписание студии (демо) ---
-TIMEZONE_OFFSET_HOURS = 3  # Беларусь: UTC+3 круглый год
-WORK_START_HOUR = 10
-WORK_END_HOUR = 20
-WORK_WEEKDAYS = {0, 1, 2, 3, 4, 5}  # 0 = понедельник ... 5 = суббота
-SLOT_STEP_MIN = 30  # шаг сетки времени, минут
-BOOKING_DAYS_AHEAD = 14  # на сколько дней вперёд можно записаться
-MIN_NOTICE_MIN = 60  # минимум за сколько минут до начала можно записаться
-CANCEL_MIN_HOURS = 0  # отмена возможна не позднее чем за столько часов
-# --- Напоминания клиентам ---
-REMIND_FIRST_HOURS = 24  # первое напоминание: за столько часов до записи
-REMIND_SECOND_HOURS = 2  # второе напоминание
-# --- Данные студии (для демо; под нового клиента меняются здесь) ---
-STUDIO_NAME = "Студия массажа «Релакс»"
-STUDIO_ABOUT = (
-    "Мы работаем с 2020 года. Опытные мастера, спокойная атмосфера, "
-    "чистота и забота о каждом госте. Подберём массаж под вашу задачу: "
-    "от снятия усталости после рабочего дня до восстановления спины."
-)
-STUDIO_ADDRESS = "г. Минск, ул. Примерная, 1 (демо-адрес)"
-STUDIO_PHONE = "+375 29 000-00-00"
-# Текст для клиентов. Должен совпадать с настройками WORK_* выше
-STUDIO_HOURS = "пн–сб с 10:00 до 20:00, воскресенье — выходной"
+# Остальные настройки лежат в clients/<имя>/settings.toml
+with open(CLIENT_DIR / "settings.toml", "rb") as _file:
+    _settings = tomllib.load(_file)
+
+_studio = _settings["studio"]
+STUDIO_NAME = _studio["name"]
+STUDIO_ABOUT = _studio["about"]
+STUDIO_ADDRESS = _studio["address"]
+STUDIO_PHONE = _studio["phone"]
+STUDIO_HOURS = _studio["hours_text"]
+
+_schedule = _settings["schedule"]
+TIMEZONE_OFFSET_HOURS = _schedule["timezone_offset_hours"]
+WORK_START_HOUR = _schedule["work_start_hour"]
+WORK_END_HOUR = _schedule["work_end_hour"]
+WORK_WEEKDAYS = set(_schedule["work_weekdays"])
+SLOT_STEP_MIN = _schedule["slot_step_min"]
+BOOKING_DAYS_AHEAD = _schedule["booking_days_ahead"]
+MIN_NOTICE_MIN = _schedule["min_notice_min"]
+
+_rules = _settings["rules"]
+CANCEL_MIN_HOURS = _rules["cancel_min_hours"]
+REMIND_FIRST_HOURS = _rules["remind_first_hours"]
+REMIND_SECOND_HOURS = _rules["remind_second_hours"]
+
+# Список услуг: [{"name": ..., "duration_min": ..., "price": ...}, ...]
+SERVICES = _settings["services"]
