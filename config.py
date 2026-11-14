@@ -2,6 +2,7 @@ import argparse
 import os
 import tomllib
 from pathlib import Path
+from datetime import datetime
 
 from dotenv import load_dotenv
 
@@ -60,3 +61,7 @@ SERVICE_DESCRIPTIONS = {item["name"]: item.get("description", "") for item in SE
 # Телефон клиента
 PHONE_REQUIRED = _rules.get("phone_required", False)
 PHONE_COUNTRY_CODE = str(_rules.get("phone_country_code", "375"))
+
+# Время утренней сводки владельцу (None, если сводка отключена)
+_digest = _rules.get("digest_time")
+DIGEST_TIME = datetime.strptime(_digest, "%H:%M").time() if _digest else None

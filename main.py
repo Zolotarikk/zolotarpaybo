@@ -50,6 +50,7 @@ async def setup_commands(bot: Bot):
                 [
                     BotCommand(command="start", description="Главное меню"),
                     BotCommand(command="admin", description="Админ-панель"),
+                    BotCommand(command="digest", description="Сводка на сегодня"),
                 ],
                 scope=BotCommandScopeChat(chat_id=config.ADMIN_ID),
             )

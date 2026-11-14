@@ -65,6 +65,14 @@ async def init_db():
             )
             """
         )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
                 # Миграция: добавляем колонки напоминаний в таблицу bookings, если их нет
         cursor = await db.execute("PRAGMA table_info(bookings)")
         existing_columns = {row[1] for row in await cursor.fetchall()}
@@ -436,5 +444,26 @@ async def set_phone(user_id: int, phone: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "UPDATE users SET phone = ? WHERE user_id = ?", (phone, user_id)
+        )
+        await db.commit()
+        
+
+async def get_state(key: str) -> str | None:
+    """Служебная отметка (например, дата последней сводки) или None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT value FROM app_state WHERE key = ?", (key,)
+        )
+        row = await cursor.fetchone()
+    return row[0] if row else None
+
+
+async def set_state(key: str, value: str):
+    """Сохраняет служебную отметку."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO app_state (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
         )
         await db.commit()

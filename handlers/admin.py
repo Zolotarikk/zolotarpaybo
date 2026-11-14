@@ -18,6 +18,7 @@ import timetable
 from handlers.booking import WEEKDAYS, chunk, format_day
 from keyboards import ADMIN_BUTTON
 from notifications import send_to_user
+from digest import build_digest
 
 router = Router()
 # Все обработчики этого файла работают только для администратора
@@ -102,7 +103,12 @@ async def render_day(callback: CallbackQuery, day: date):
 @router.message(F.text == ADMIN_BUTTON)
 async def open_panel(message: Message):
     await message.answer("⚙️ Админ-панель", reply_markup=panel_keyboard())
-
+    
+@router.message(Command("digest"))
+async def cmd_digest(message: Message):
+    """Сводка на сегодня по запросу владельца."""
+    text = await build_digest(timetable.now_local().date())
+    await message.answer(text, parse_mode="HTML")
 
 @router.callback_query(F.data == "adm:menu")
 async def back_to_panel(callback: CallbackQuery):
