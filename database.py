@@ -73,6 +73,18 @@ async def init_db():
             )
             """
         )
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reviews (
+                booking_id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                rating INTEGER NOT NULL,
+                comment TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    
                 # Миграция: добавляем колонки напоминаний в таблицу bookings, если их нет
         cursor = await db.execute("PRAGMA table_info(bookings)")
         existing_columns = {row[1] for row in await cursor.fetchall()}
@@ -86,6 +98,14 @@ async def init_db():
         if "price" not in existing_columns:
             await db.execute("ALTER TABLE bookings ADD COLUMN price INTEGER")
                         # Миграция: телефон клиента в таблице users
+         # Миграция: отметка «оценка по записи уже запрошена»
+        if "review_requested" not in existing_columns:
+            await db.execute(
+                "ALTER TABLE bookings "
+                "ADD COLUMN review_requested INTEGER NOT NULL DEFAULT 0"
+            )
+            # Для уже существующих записей оценку не запрашиваем
+            await db.execute("UPDATE bookings SET review_requested = 1")
         cursor = await db.execute("PRAGMA table_info(users)")
         user_columns = {row[1] for row in await cursor.fetchall()}
         if "phone" not in user_columns:
@@ -563,3 +583,79 @@ async def get_export_rows(from_dt: datetime, to_dt: datetime):
             created,
         ) in rows
     ]
+
+
+async def get_due_review_requests(now: datetime, delay_min: int):
+    """Записи, по которым пора спросить оценку: (id, user_id, услуга, начало)."""
+    ended_before = now - timedelta(minutes=delay_min)
+    ended_after = now - timedelta(hours=24)  # о старых визитах не спрашиваем
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT b.id, b.user_id, s.name, b.start_at "
+            "FROM bookings b JOIN services s ON s.id = b.service_id "
+            "WHERE b.status = 'active' AND b.review_requested = 0 "
+            "AND b.end_at <= ? AND b.end_at > ? ORDER BY b.end_at",
+            (ended_before.strftime(DT_FORMAT), ended_after.strftime(DT_FORMAT)),
+        )
+        rows = await cursor.fetchall()
+    return [
+        (booking_id, user_id, name, parse_dt(start))
+        for booking_id, user_id, name, start in rows
+    ]
+
+
+async def mark_review_requested(booking_id: int):
+    """Отмечает, что оценку по записи уже запросили."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE bookings SET review_requested = 1 WHERE id = ?", (booking_id,)
+        )
+        await db.commit()
+
+
+async def save_review(booking_id: int, user_id: int, rating: int) -> bool:
+    """Сохраняет оценку. False, если по этой записи оценка уже есть."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO reviews (booking_id, user_id, rating) "
+            "VALUES (?, ?, ?)",
+            (booking_id, user_id, rating),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def set_review_comment(booking_id: int, comment: str):
+    """Сохраняет комментарий к оценке."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE reviews SET comment = ? WHERE booking_id = ?",
+            (comment, booking_id),
+        )
+        await db.commit()
+
+async def create_test_visit(user_id: int, now: datetime) -> int:
+    """Только для демо: создаёт уже завершившуюся запись, чтобы проверить отзывы."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT id, duration_min, price FROM services "
+            "WHERE is_active = 1 ORDER BY id LIMIT 1"
+        )
+        service_id, duration, price = await cursor.fetchone()
+        # Запись закончилась чуть раньше, чем нужно для запроса оценки
+        end = now - timedelta(minutes=config.REVIEW_DELAY_MIN + 5)
+        start = end - timedelta(minutes=duration)
+        cursor = await db.execute(
+            "INSERT INTO bookings (user_id, service_id, start_at, end_at, "
+            "reminded_24h, reminded_2h, price, review_requested) "
+            "VALUES (?, ?, ?, ?, 1, 1, ?, 0)",
+            (
+                user_id,
+                service_id,
+                start.strftime(DT_FORMAT),
+                end.strftime(DT_FORMAT),
+                price,
+            ),
+        )
+        await db.commit()
+        return cursor.lastrowid

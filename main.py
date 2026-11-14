@@ -20,6 +20,7 @@ from handlers import (
     fallback,
     my_bookings,
     reschedule,
+    reviews,
 )
 from middlewares import UserTrackingMiddleware
 
@@ -123,6 +124,7 @@ async def main():
         reschedule.router,
         calendar_ics.router,
         fallback.router,
+        reviews.router,
     )
     await setup_commands(bot)
     # Фоновая задача напоминаний работает параллельно с ботом

@@ -65,3 +65,10 @@ PHONE_COUNTRY_CODE = str(_rules.get("phone_country_code", "375"))
 # Время утренней сводки владельцу (None, если сводка отключена)
 _digest = _rules.get("digest_time")
 DIGEST_TIME = datetime.strptime(_digest, "%H:%M").time() if _digest else None
+
+# Отзывы после визита
+_reviews = _settings.get("reviews", {})
+REVIEWS_ENABLED = _reviews.get("enabled", False)
+REVIEW_DELAY_MIN = _reviews.get("request_delay_min", 60)
+REVIEW_POSITIVE_FROM = _reviews.get("positive_from", 4)
+REVIEW_PUBLIC_URL = _reviews.get("public_url", "")

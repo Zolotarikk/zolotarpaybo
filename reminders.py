@@ -9,6 +9,7 @@ import timetable
 from handlers.booking import format_day
 from notifications import send_to_user
 from digest import send_digest_if_due
+from review_requests import send_review_requests
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ async def send_reminders(bot, kind: str, hours: int):
 
 
 async def reminder_loop(bot):
-    """Бесконечный цикл: раз в минуту проверяет напоминания и утреннюю сводку."""
+    """Каждую минуту проверяет напоминания, сводку и запросы оценки."""
     while True:
         try:
             await send_reminders(bot, "24h", config.REMIND_FIRST_HOURS)
@@ -63,4 +64,8 @@ async def reminder_loop(bot):
         except Exception:
             # Ошибка в одной проверке не должна остановить весь цикл
             logger.exception("Ошибка в цикле напоминаний")
+        try:
+            await send_review_requests(bot)
+        except Exception:
+            logger.exception("Ошибка при отправке запросов оценки")
         await asyncio.sleep(CHECK_INTERVAL_SEC)

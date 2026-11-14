@@ -111,6 +111,20 @@ async def cmd_digest(message: Message):
     """Сводка на сегодня по запросу владельца."""
     text = await build_digest(timetable.now_local().date())
     await message.answer(text, parse_mode="HTML")
+    
+@router.message(Command("fakevisit"))
+async def cmd_fake_visit(message: Message):
+    """Тест: создаёт прошедшую запись, чтобы проверить запрос отзыва (только демо)."""
+    if config.CLIENT != "demo":
+        await message.answer("Команда доступна только в демо-версии.")
+        return
+    booking_id = await database.create_test_visit(
+        message.from_user.id, timetable.now_local()
+    )
+    await message.answer(
+        f"Создана тестовая прошедшая запись №{booking_id}. "
+        "Запрос оценки придёт в течение минуты."
+    )
 
 @router.callback_query(F.data == "adm:menu")
 async def back_to_panel(callback: CallbackQuery):
