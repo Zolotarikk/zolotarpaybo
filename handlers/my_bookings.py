@@ -1,4 +1,5 @@
 from datetime import timedelta
+from html import escape
 
 from aiogram import F, Router
 from aiogram.types import (
@@ -7,55 +8,45 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-from html import escape
-
-from ui import client_html
 
 import config
 import database
 import timetable
-from handlers.booking import format_day
+from handlers.booking import HTML, format_day
 from notifications import send_to_admin
+from ui import client_html
 
 router = Router()
 
 
-async def render_my_bookings(user_id: int):
-    """Собирает текст и кнопки списка записей клиента."""
-    bookings = await database.get_user_bookings(user_id, timetable.now_local())
-    if not bookings:
-        return (
-            "У вас нет предстоящих записей. "
-            "Нажмите «💆 Записаться», чтобы выбрать время.",
-            None,
-        )
-    lines = ["📋 Ваши предстоящие записи:\n"]
-    rows = []
-    for booking_id, name, start, end in bookings:
-        lines.append(
-            f"№{booking_id} — {name}\n"
-            f"📅 {format_day(start.date())}\n"
-            f"🕒 {start:%H:%M}–{end:%H:%M}\n"
-        )
-        rows.append(
+def card_text(name: str, start, end) -> str:
+    """Текст карточки записи."""
+    return (
+        f"💆 <b>{escape(name)}</b>\n"
+        f"📅 {format_day(start.date())}\n"
+        f"🕒 {start:%H:%M}–{end:%H:%M}"
+    )
+
+
+def card_keyboard(booking_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"🔁 Перенести №{booking_id}",
-                    callback_data=f"mv:{booking_id}",
+                    text="🔁 Перенести", callback_data=f"mv:{booking_id}"
                 ),
                 InlineKeyboardButton(
-                    text=f"❌ Отменить №{booking_id}",
-                    callback_data=f"cancel:{booking_id}",
+                    text="❌ Отменить", callback_data=f"cancel:{booking_id}"
                 ),
             ]
-        )
-    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+        ]
+    )
 
 
 async def get_cancellable_booking(callback: CallbackQuery, booking_id: int):
     """Возвращает запись, если её можно отменить. Иначе показывает причину."""
     booking = await database.get_booking(booking_id)
-    # Проверяем, что запись существует, принадлежит этому клиенту и активна
+    # Запись должна существовать, принадлежать этому клиенту и быть активной
     if (
         booking is None
         or booking[1] != callback.from_user.id
@@ -78,14 +69,52 @@ async def get_cancellable_booking(callback: CallbackQuery, booking_id: int):
 
 @router.message(F.text == "📋 Мои записи")
 async def my_bookings(message: Message):
-    text, keyboard = await render_my_bookings(message.from_user.id)
-    await message.answer(text, reply_markup=keyboard)
+    bookings = await database.get_user_bookings(
+        message.from_user.id, timetable.now_local()
+    )
+    if not bookings:
+        await message.answer(
+            "У вас нет предстоящих записей. "
+            "Нажмите «💆 Записаться», чтобы выбрать время."
+        )
+        return
+    await message.answer("📋 <b>Ваши предстоящие записи</b>", parse_mode=HTML)
+    for booking_id, name, start, end in bookings:
+        await message.answer(
+            card_text(name, start, end),
+            reply_markup=card_keyboard(booking_id),
+            parse_mode=HTML,
+        )
+
+
+@router.callback_query(F.data.startswith("card:"))
+async def show_card(callback: CallbackQuery):
+    """Возвращает карточку записи (кнопки «Назад» и «Нет, оставить»)."""
+    booking_id = int(callback.data.split(":")[1])
+    booking = await database.get_booking(booking_id)
+    if (
+        booking is None
+        or booking[1] != callback.from_user.id
+        or booking[6] != "active"
+    ):
+        await callback.message.edit_text("Эта запись уже отменена или перенесена.")
+        await callback.answer()
+        return
+    _, _, name, _price, start, end, _status = booking
+    await callback.message.edit_text(
+        card_text(name, start, end),
+        reply_markup=card_keyboard(booking_id),
+        parse_mode=HTML,
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "mybookings")
-async def back_to_list(callback: CallbackQuery):
-    text, keyboard = await render_my_bookings(callback.from_user.id)
-    await callback.message.edit_text(text, reply_markup=keyboard)
+async def legacy_back_to_list(callback: CallbackQuery):
+    """Кнопка из старых сообщений: просто отправляем в раздел «Мои записи»."""
+    await callback.message.edit_text(
+        "Откройте раздел «📋 Мои записи» в меню, чтобы увидеть актуальные записи."
+    )
     await callback.answer()
 
 
@@ -103,15 +132,17 @@ async def ask_cancel(callback: CallbackQuery):
                     text="Да, отменить", callback_data=f"cancel_yes:{booking_id}"
                 )
             ],
-            [InlineKeyboardButton(text="Нет, оставить", callback_data="mybookings")],
+            [
+                InlineKeyboardButton(
+                    text="Нет, оставить", callback_data=f"card:{booking_id}"
+                )
+            ],
         ]
     )
     await callback.message.edit_text(
-        f"Отменить запись №{booking_id}?\n\n"
-        f"💆 {name}\n"
-        f"📅 {format_day(start.date())}\n"
-        f"🕒 {start:%H:%M}–{end:%H:%M}",
+        "Отменить эту запись?\n\n" + card_text(name, start, end),
         reply_markup=keyboard,
+        parse_mode=HTML,
     )
     await callback.answer()
 
@@ -130,7 +161,7 @@ async def do_cancel(callback: CallbackQuery):
         return
 
     await callback.message.edit_text(
-        f"✅ Запись №{booking_id} отменена.\n\n"
+        "✅ Запись отменена.\n\n"
         "Чтобы выбрать другое время, нажмите «💆 Записаться»."
     )
     await callback.answer()
@@ -139,11 +170,10 @@ async def do_cancel(callback: CallbackQuery):
     phone = await database.get_phone(user.id)
     await send_to_admin(
         callback.bot,
-        f"❌ <b>Клиент отменил запись №{booking_id}</b>\n\n"
+        "❌ <b>Клиент отменил запись</b>\n\n"
         f"👤 {client_html(user.id, user.full_name, user.username, phone)}\n"
         f"💆 {escape(name)}\n"
         f"📅 {format_day(start.date())}\n"
         f"🕒 {start:%H:%M}–{end:%H:%M}",
         parse_mode="HTML",
     )
-    

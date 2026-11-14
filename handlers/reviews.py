@@ -91,7 +91,7 @@ async def rate(callback: CallbackQuery, state: FSMContext):
     await send_to_admin(
         callback.bot,
         f"⚠️ <b>Низкая оценка: {stars}</b>\n"
-        f"Запись №{booking_id}, {escape(name)}\n"
+        f"{escape(name)}, {booking[4]:%d.%m в %H:%M}\n"
         f"👤 {client_html(user.id, user.full_name, user.username, phone)}\n\n"
         "Стоит связаться с клиентом и разобраться.",
         parse_mode="HTML",
@@ -130,7 +130,7 @@ async def comment_received(message: Message, state: FSMContext):
     phone = await database.get_phone(user.id)
     await send_to_admin(
         message.bot,
-        f"💬 <b>Комментарий к оценке по записи №{booking_id}</b>\n"
+        f"💬 <b>Комментарий к оценке</b>\n"
         f"👤 {client_html(user.id, user.full_name, user.username, phone)}\n\n"
         f"«{escape(comment)}»",
         parse_mode="HTML",

@@ -71,7 +71,7 @@ async def render_day(callback: CallbackQuery, day: date):
         entries.append(
             (
                 start,
-                f"🕒 {start:%H:%M}–{end:%H:%M} · №{booking_id}\n"
+                f"🕒 {start:%H:%M}–{end:%H:%M}\n"
                 f"💆 {escape(service)}\n"
                 f"👤 {client_html(client_id, full_name, username, phone)}\n",
             )
@@ -79,7 +79,7 @@ async def render_day(callback: CallbackQuery, day: date):
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"❌ Отменить №{booking_id} ({start:%H:%M})",
+                    text=f"❌ Отменить {start:%H:%M}",
                     callback_data=f"adm:cx:{booking_id}",
                 )
             ]
@@ -111,7 +111,7 @@ async def cmd_digest(message: Message):
     """Сводка на сегодня по запросу владельца."""
     text = await build_digest(timetable.now_local().date())
     await message.answer(text, parse_mode="HTML")
-    
+
 @router.message(Command("fakevisit"))
 async def cmd_fake_visit(message: Message):
     """Тест: создаёт прошедшую запись, чтобы проверить запрос отзыва (только демо)."""
@@ -179,7 +179,7 @@ async def ask_cancel(callback: CallbackQuery):
         ]
     )
     await callback.message.edit_text(
-        f"Отменить запись №{booking_id}?\n\n"
+        f"Отменить эту запись?\n\n"
         f"💆 {name}\n"
         f"📅 {format_day(start.date())}\n"
         f"🕒 {start:%H:%M}–{end:%H:%M}\n\n"
@@ -206,13 +206,13 @@ async def do_cancel(callback: CallbackQuery):
     delivered = await send_to_user(
         callback.bot,
         client_id,
-        f"😔 К сожалению, студия вынуждена отменить вашу запись №{booking_id}:\n\n"
+        f"😔 К сожалению, студия вынуждена отменить вашу запись:\n\n"
         f"💆 {name}\n"
         f"📅 {format_day(start.date())}\n"
         f"🕒 {start:%H:%M}–{end:%H:%M}\n\n"
         "Приносим извинения. Выбрать другое время можно в разделе «💆 Записаться».",
     )
-    result = f"✅ Запись №{booking_id} отменена."
+    result = "✅ Запись отменена."
     if delivered:
         result += " Клиенту отправлено уведомление."
     else:

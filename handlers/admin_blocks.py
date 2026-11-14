@@ -36,10 +36,15 @@ async def make_block(callback: CallbackQuery, day: date, start: datetime, end: d
     """Создаёт блок и показывает результат."""
     block_id, conflicts = await database.create_block(start, end)
     if block_id is None:
-        numbers = ", ".join(f"№{n}" for n in conflicts)
+        lines = []
+        for conflict_id in conflicts:
+            conflict = await database.get_booking(conflict_id)
+            if conflict:
+                lines.append(f"• {conflict[4]:%H:%M}–{conflict[5]:%H:%M}, {conflict[2]}")
         text = (
-            f"Нельзя закрыть это время: в нём есть записи {numbers}.\n\n"
-            "Откройте расписание дня, отмените эти записи и повторите."
+            "Нельзя закрыть это время: в нём уже есть записи:\n"
+            + "\n".join(lines)
+            + "\n\nОткройте расписание дня, отмените их и повторите."
         )
     else:
         text = (

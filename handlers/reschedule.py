@@ -1,6 +1,5 @@
 from datetime import date, datetime, timedelta
 from html import escape
-from ui import client_html
 
 from aiogram import F, Router
 from aiogram.types import (
@@ -14,13 +13,14 @@ import database
 import timetable
 from handlers.booking import HTML, calendar_keyboard, chunk, day_label, format_day
 from notifications import send_to_admin
+from ui import client_html
 
 router = Router()
 
 
-def title(booking_id: int, name: str, start: datetime, end: datetime) -> str:
+def title(name: str, start: datetime, end: datetime) -> str:
     return (
-        f"🔁 <b>Перенос записи №{booking_id}</b>\n"
+        "🔁 <b>Перенос записи</b>\n"
         f"💆 {escape(name)}\n"
         f"Сейчас: {format_day(start.date())}, {start:%H:%M}–{end:%H:%M}\n\n"
     )
@@ -34,7 +34,7 @@ def dates_markup(booking_id: int) -> InlineKeyboardMarkup:
         )
         for day in timetable.available_dates()
     ]
-    back = [InlineKeyboardButton(text="⬅ Назад", callback_data="mybookings")]
+    back = [InlineKeyboardButton(text="⬅ Назад", callback_data=f"card:{booking_id}")]
     return InlineKeyboardMarkup(inline_keyboard=chunk(buttons, 3) + [back])
 
 
@@ -68,7 +68,7 @@ async def choose_new_date(callback: CallbackQuery):
         return
     _, _, name, _price, start, end, _status = booking
     await callback.message.edit_text(
-        title(booking_id, name, start, end) + "<i>Выберите новую дату</i>",
+        title(name, start, end) + "<i>Выберите новую дату</i>",
         reply_markup=dates_markup(booking_id),
         parse_mode=HTML,
     )
@@ -94,7 +94,7 @@ async def choose_new_time(callback: CallbackQuery):
         if slot != start  # перенос на то же самое время не нужен
     ]
 
-    header = title(booking_id, name, start, end) + f"📅 Новая дата: {format_day(day)}\n\n"
+    header = title(name, start, end) + f"📅 Новая дата: {format_day(day)}\n\n"
     if not slots:
         await callback.message.edit_text(
             header + "😔 На эту дату свободного времени нет.\n"
@@ -191,7 +191,7 @@ async def do_move(callback: CallbackQuery):
         return
 
     await callback.message.edit_text(
-        f"✅ <b>Запись №{booking_id} перенесена</b>\n\n"
+        "✅ <b>Запись перенесена</b>\n\n"
         f"💆 {escape(name)}\n"
         f"📅 {format_day(new_start.date())}\n"
         f"🕒 {new_start:%H:%M}–{new_end:%H:%M}\n"
@@ -206,7 +206,7 @@ async def do_move(callback: CallbackQuery):
     phone = await database.get_phone(user.id)
     await send_to_admin(
         callback.bot,
-        f"🔁 <b>Клиент перенёс запись №{booking_id}</b>\n\n"
+        "🔁 <b>Клиент перенёс запись</b>\n\n"
         f"👤 {client_html(user.id, user.full_name, user.username, phone)}\n"
         f"💆 {escape(name)}\n"
         f"❌ Было: {format_day(start.date())}, {start:%H:%M}–{end:%H:%M}\n"

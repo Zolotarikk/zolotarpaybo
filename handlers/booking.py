@@ -162,7 +162,7 @@ async def notify_admin(bot, user, booking_id, name, price, start, end):
     """Отправляет владельцу студии уведомление о новой записи."""
     phone = await database.get_phone(user.id)
     text = (
-        f"🔔 <b>Новая запись №{booking_id}</b>\n\n"
+        f"🔔 <b>Новая запись</b>\n\n"
         f"👤 {client_html(user.id, user.full_name, user.username, phone)}\n"
         f"💆 {escape(name)}, {price} BYN\n"
         f"📅 {format_day(start.date())}\n"
@@ -211,7 +211,7 @@ async def finish_booking(
         return
 
     await show(
-        f"🎉 <b>Вы записаны!</b> Запись №{booking_id}\n\n"
+        f"🎉 <b>Вы записаны!</b>\n\n"
         f"💆 {escape(name)} ({duration} мин)\n"
         f"📅 {format_day(start.date())}\n"
         f"🕒 {start:%H:%M}–{end:%H:%M}\n"
