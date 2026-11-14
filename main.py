@@ -12,6 +12,7 @@ import reminders
 from handlers import (
     admin,
     admin_blocks,
+    admin_stats,
     booking,
     calendar_ics,
     common,
@@ -116,6 +117,7 @@ async def main():
         my_bookings.router,
         admin.router,
         admin_blocks.router,
+        admin_stats.router,
         reschedule.router,
         calendar_ics.router,
         fallback.router,

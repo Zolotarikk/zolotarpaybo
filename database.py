@@ -82,6 +82,9 @@ async def init_db():
                     f"ALTER TABLE bookings "
                     f"ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
                 )
+                        # Миграция: цена записи на момент её создания (для статистики)
+        if "price" not in existing_columns:
+            await db.execute("ALTER TABLE bookings ADD COLUMN price INTEGER")
                         # Миграция: телефон клиента в таблице users
         cursor = await db.execute("PRAGMA table_info(users)")
         user_columns = {row[1] for row in await cursor.fetchall()}
@@ -169,11 +172,17 @@ async def create_booking(
         if await cursor.fetchone():
             await db.rollback()
             return None
+        # Запоминаем цену на момент записи: позже цена услуги может измениться
+        cursor = await db.execute(
+            "SELECT price FROM services WHERE id = ?", (service_id,)
+        )
+        row = await cursor.fetchone()
+        price = row[0] if row else None
         cursor = await db.execute(
             "INSERT INTO bookings "
-            "(user_id, service_id, start_at, end_at, reminded_24h, reminded_2h) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, service_id, start_s, end_s, skip_first, skip_second),
+            "(user_id, service_id, start_at, end_at, reminded_24h, reminded_2h, price) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, service_id, start_s, end_s, skip_first, skip_second, price),
         )
         await db.commit()
         return cursor.lastrowid
@@ -467,3 +476,45 @@ async def set_state(key: str, value: str):
             (key, value),
         )
         await db.commit()
+        
+async def get_period_bookings(from_dt: datetime, to_dt: datetime):
+    """Записи с началом в периоде [from_dt, to_dt).
+
+    Возвращает (user_id, услуга, цена, начало, конец, статус).
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT b.user_id, s.name, COALESCE(b.price, s.price), "
+            "b.start_at, b.end_at, b.status "
+            "FROM bookings b JOIN services s ON s.id = b.service_id "
+            "WHERE b.start_at >= ? AND b.start_at < ?",
+            (from_dt.strftime(DT_FORMAT), to_dt.strftime(DT_FORMAT)),
+        )
+        rows = await cursor.fetchall()
+    return [
+        (user_id, name, price, parse_dt(start), parse_dt(end), status)
+        for user_id, name, price, start, end, status in rows
+    ]
+
+
+async def get_period_blocks(from_dt: datetime, to_dt: datetime):
+    """Закрытое время с началом в периоде: список (начало, конец)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT start_at, end_at FROM blocks "
+            "WHERE start_at >= ? AND start_at < ?",
+            (from_dt.strftime(DT_FORMAT), to_dt.strftime(DT_FORMAT)),
+        )
+        rows = await cursor.fetchall()
+    return [(parse_dt(start), parse_dt(end)) for start, end in rows]
+
+
+async def get_first_visit_dates() -> dict[int, datetime]:
+    """Дата первой активной записи каждого клиента: {user_id: начало}."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT user_id, MIN(start_at) FROM bookings "
+            "WHERE status = 'active' GROUP BY user_id"
+        )
+        rows = await cursor.fetchall()
+    return {user_id: parse_dt(start) for user_id, start in rows}

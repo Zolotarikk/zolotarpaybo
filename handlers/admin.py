@@ -43,6 +43,7 @@ def panel_keyboard() -> InlineKeyboardMarkup:
             )
         ],
         [InlineKeyboardButton(text="🗓 Выбрать другую дату", callback_data="adm:dates")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stm")],
         [InlineKeyboardButton(text="🚫 Закрыть время", callback_data="adm:bl")],
         [InlineKeyboardButton(text="🔓 Закрытое время", callback_data="adm:ul")],
     ]
@@ -103,7 +104,7 @@ async def render_day(callback: CallbackQuery, day: date):
 @router.message(F.text == ADMIN_BUTTON)
 async def open_panel(message: Message):
     await message.answer("⚙️ Админ-панель", reply_markup=panel_keyboard())
-    
+
 @router.message(Command("digest"))
 async def cmd_digest(message: Message):
     """Сводка на сегодня по запросу владельца."""
