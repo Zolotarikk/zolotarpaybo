@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from logging.handlers import RotatingFileHandler
 
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest
@@ -18,8 +19,24 @@ from handlers import (
     my_bookings,
     reschedule,
 )
+from middlewares import UserTrackingMiddleware
 
 logger = logging.getLogger(__name__)
+
+
+def setup_logging():
+    """Журнал с временем событий: в окно терминала и в файл clients/<имя>/bot.log."""
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    console = logging.StreamHandler()
+    console.setFormatter(formatter)
+    log_file = RotatingFileHandler(
+        config.CLIENT_DIR / "bot.log",
+        maxBytes=1_000_000,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    log_file.setFormatter(formatter)
+    logging.basicConfig(level=logging.INFO, handlers=[console, log_file])
 
 
 async def setup_commands(bot: Bot):
@@ -78,13 +95,19 @@ async def main():
         raise RuntimeError(
             f"Не найден BOT_TOKEN. Проверь файл {config.CLIENT_DIR / '.env'}"
         )
-    logging.basicConfig(level=logging.INFO)
+    setup_logging()
     logger.info("Запуск клиента: %s", config.CLIENT)
     await database.init_db()
     await database.sync_services(config.SERVICES)
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher()
     register_error_handler(dp)
+
+    # Запоминаем клиента при любом его действии
+    tracker = UserTrackingMiddleware()
+    dp.message.outer_middleware(tracker)
+    dp.callback_query.outer_middleware(tracker)
+
     # Порядок важен: fallback должен идти последним
     dp.include_routers(
         common.router,

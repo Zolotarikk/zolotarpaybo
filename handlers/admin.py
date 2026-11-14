@@ -1,4 +1,7 @@
 from datetime import date, timedelta
+from html import escape
+
+from ui import client_html
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -52,16 +55,22 @@ async def render_day(callback: CallbackQuery, day: date):
 
     entries = []  # (время начала, текст) для сортировки по времени
     rows = []
-    for booking_id, full_name, username, service, start, end in bookings:
-        who = full_name or "Клиент"
-        if username:
-            who += f" (@{username})"
+    for (
+        booking_id,
+        client_id,
+        full_name,
+        username,
+        phone,
+        service,
+        start,
+        end,
+    ) in bookings:
         entries.append(
             (
                 start,
                 f"🕒 {start:%H:%M}–{end:%H:%M} · №{booking_id}\n"
-                f"💆 {service}\n"
-                f"👤 {who}\n",
+                f"💆 {escape(service)}\n"
+                f"👤 {client_html(client_id, full_name, username, phone)}\n",
             )
         )
         rows.append(
@@ -82,7 +91,9 @@ async def render_day(callback: CallbackQuery, day: date):
     lines += [text for _, text in entries]
     rows.append([InlineKeyboardButton(text="⬅ В админ-панель", callback_data="adm:menu")])
     await callback.message.edit_text(
-        "\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        parse_mode="HTML",
     )
     await callback.answer()
 

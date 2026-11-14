@@ -7,6 +7,9 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
+from html import escape
+
+from ui import client_html
 
 import config
 import database
@@ -62,11 +65,13 @@ async def get_cancellable_booking(callback: CallbackQuery, booking_id: int):
         return None
     start = booking[4]
     if start - timetable.now_local() < timedelta(hours=config.CANCEL_MIN_HOURS):
-        await callback.answer(
-            f"Отмена возможна не позднее чем за {config.CANCEL_MIN_HOURS} ч. "
-            "до начала. Пожалуйста, позвоните в студию.",
-            show_alert=True,
+        # Объясняем обычным сообщением: всплывающее окно легко не заметить
+        await callback.message.answer(
+            f"⏳ Отменить запись через бота можно не позднее чем за "
+            f"{config.CANCEL_MIN_HOURS} ч. до начала.\n"
+            f"Пожалуйста, позвоните в студию: {config.STUDIO_PHONE}"
         )
+        await callback.answer("Отмена через бота уже недоступна")
         return None
     return booking
 
@@ -131,12 +136,14 @@ async def do_cancel(callback: CallbackQuery):
     await callback.answer()
 
     user = callback.from_user
-    username = f" (@{user.username})" if user.username else ""
+    phone = await database.get_phone(user.id)
     await send_to_admin(
         callback.bot,
-        f"❌ Клиент отменил запись №{booking_id}\n\n"
-        f"👤 {user.full_name}{username}\n"
-        f"💆 {name}\n"
+        f"❌ <b>Клиент отменил запись №{booking_id}</b>\n\n"
+        f"👤 {client_html(user.id, user.full_name, user.username, phone)}\n"
+        f"💆 {escape(name)}\n"
         f"📅 {format_day(start.date())}\n"
         f"🕒 {start:%H:%M}–{end:%H:%M}",
+        parse_mode="HTML",
     )
+    

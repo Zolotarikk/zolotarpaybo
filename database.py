@@ -74,16 +74,22 @@ async def init_db():
                     f"ALTER TABLE bookings "
                     f"ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
                 )
+                        # Миграция: телефон клиента в таблице users
+        cursor = await db.execute("PRAGMA table_info(users)")
+        user_columns = {row[1] for row in await cursor.fetchall()}
+        if "phone" not in user_columns:
+            await db.execute("ALTER TABLE users ADD COLUMN phone TEXT")
         
         await db.commit()
 
 
 async def add_user(user_id: int, full_name: str, username: str | None):
-    """Сохраняет пользователя. Если он уже есть, ничего не меняет."""
+    """Сохраняет пользователя или обновляет его имя и username."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT OR IGNORE INTO users (user_id, full_name, username) "
-            "VALUES (?, ?, ?)",
+            "INSERT INTO users (user_id, full_name, username) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "full_name = excluded.full_name, username = excluded.username",
             (user_id, full_name, username),
         )
         await db.commit()
@@ -211,10 +217,14 @@ async def cancel_booking(booking_id: int, user_id: int) -> bool:
 
 
 async def get_day_bookings(day: date):
-    """Активные записи на день: (id, клиент, username, услуга, начало, конец)."""
+    """Активные записи на день.
+
+    Возвращает (id, user_id, клиент, username, телефон, услуга, начало, конец).
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT b.id, u.full_name, u.username, s.name, b.start_at, b.end_at "
+            "SELECT b.id, b.user_id, u.full_name, u.username, u.phone, "
+            "s.name, b.start_at, b.end_at "
             "FROM bookings b "
             "JOIN services s ON s.id = b.service_id "
             "LEFT JOIN users u ON u.user_id = b.user_id "
@@ -224,8 +234,17 @@ async def get_day_bookings(day: date):
         )
         rows = await cursor.fetchall()
     return [
-        (booking_id, full_name, username, service, parse_dt(start), parse_dt(end))
-        for booking_id, full_name, username, service, start, end in rows
+        (
+            booking_id,
+            user_id,
+            full_name,
+            username,
+            phone,
+            service,
+            parse_dt(start),
+            parse_dt(end),
+        )
+        for booking_id, user_id, full_name, username, phone, service, start, end in rows
     ]
 
 
@@ -400,3 +419,22 @@ async def move_booking(
         )
         await db.commit()
         return True
+    
+
+async def get_phone(user_id: int) -> str | None:
+    """Телефон клиента или None, если ещё не указан."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT phone FROM users WHERE user_id = ?", (user_id,)
+        )
+        row = await cursor.fetchone()
+    return row[0] if row and row[0] else None
+
+
+async def set_phone(user_id: int, phone: str):
+    """Сохраняет телефон клиента."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET phone = ? WHERE user_id = ?", (phone, user_id)
+        )
+        await db.commit()

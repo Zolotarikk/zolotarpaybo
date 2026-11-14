@@ -57,3 +57,6 @@ STUDIO_LATITUDE = _studio.get("latitude")
 STUDIO_LONGITUDE = _studio.get("longitude")
 # Описания услуг для клиентов: {название: описание}
 SERVICE_DESCRIPTIONS = {item["name"]: item.get("description", "") for item in SERVICES}
+# Телефон клиента
+PHONE_REQUIRED = _rules.get("phone_required", False)
+PHONE_COUNTRY_CODE = str(_rules.get("phone_country_code", "375"))

@@ -3,6 +3,7 @@ from html import escape
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import FSInputFile, Message
+from aiogram.fsm.context import FSMContext
 
 import config
 import database
@@ -16,7 +17,8 @@ _photo_file_id: str | None = None
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
     global _photo_file_id
     user = message.from_user
     await database.add_user(user.id, user.full_name, user.username)

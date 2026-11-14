@@ -5,13 +5,13 @@ import config
 logger = logging.getLogger(__name__)
 
 
-async def send_to_admin(bot, text: str):
+async def send_to_admin(bot, text: str, parse_mode: str | None = None):
     """Отправляет сообщение администратору. Сбой не должен ломать основное действие."""
     if not config.ADMIN_ID:
         logger.warning("ADMIN_ID не задан, уведомление не отправлено")
         return
     try:
-        await bot.send_message(config.ADMIN_ID, text)
+        await bot.send_message(config.ADMIN_ID, text, parse_mode=parse_mode)
     except Exception:
         logger.exception("Не удалось отправить уведомление администратору")
 

@@ -3,16 +3,24 @@ from datetime import date, datetime, timedelta
 from html import escape
 
 from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
+    ReplyKeyboardMarkup,
 )
 
 import config
 import database
 import timetable
+from keyboards import main_menu_for
+from notifications import send_to_admin
+from phone import normalize_phone
+from ui import client_html
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -21,6 +29,21 @@ WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 HTML = "HTML"  # режим разметки: <b>жирный</b>, <i>курсив</i>
 
 SERVICE_PROMPT = "💆 <b>Запись на приём</b>\n<i>Шаг 1 из 4 · выберите услугу</i>"
+
+PHONE_CANCEL = "⬅ Отмена"
+# Текст, похожий на номер: цифры, пробелы, дефисы, скобки
+PHONE_LIKE = r"^[+\d][\d\s\-()]{5,}$"
+PHONE_PROMPT = (
+    "📱 <b>Номер телефона</b>\n\n"
+    "Чтобы мы могли связаться с вами, если что-то изменится, укажите номер. "
+    "Нажмите кнопку ниже или введите номер текстом, например "
+    "<code>+375291234567</code>.\n\n"
+    "<i>Номер увидит только администратор студии.</i>"
+)
+
+
+class BookingStates(StatesGroup):
+    waiting_phone = State()
 
 
 def format_day(day: date) -> str:
@@ -124,33 +147,81 @@ def confirm_keyboard(service_id: int, day: date, hhmm: str) -> InlineKeyboardMar
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def show_slot_taken(callback: CallbackQuery, service_id: int):
-    """Сообщает, что выбранное время уже недоступно, и предлагает другую дату."""
-    await callback.message.edit_text(
-        "😔 К сожалению, это время только что заняли. Выберите другую дату:",
-        reply_markup=dates_keyboard(service_id),
+def phone_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📱 Отправить мой номер", request_contact=True)],
+            [KeyboardButton(text=PHONE_CANCEL)],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
     )
-    await callback.answer()
 
 
 async def notify_admin(bot, user, booking_id, name, price, start, end):
     """Отправляет владельцу студии уведомление о новой записи."""
-    if not config.ADMIN_ID:
-        logger.warning("ADMIN_ID не задан, уведомление не отправлено")
-        return
-    username = f" (@{user.username})" if user.username else ""
+    phone = await database.get_phone(user.id)
     text = (
-        f"🔔 Новая запись №{booking_id}\n\n"
-        f"👤 {user.full_name}{username}\n"
-        f"💆 {name}, {price} BYN\n"
+        f"🔔 <b>Новая запись №{booking_id}</b>\n\n"
+        f"👤 {client_html(user.id, user.full_name, user.username, phone)}\n"
+        f"💆 {escape(name)}, {price} BYN\n"
         f"📅 {format_day(start.date())}\n"
         f"🕒 {start:%H:%M}–{end:%H:%M}"
     )
-    try:
-        await bot.send_message(config.ADMIN_ID, text)
-    except Exception:
-        # Запись уже сохранена, сбой уведомления не должен её ломать
-        logger.exception("Не удалось отправить уведомление администратору")
+    await send_to_admin(bot, text, parse_mode=HTML)
+
+
+async def finish_booking(
+    target: Message, user, bot, service_id: int, day_str: str, hhmm: str, edit: bool
+):
+    """Проверяет время, создаёт запись и показывает результат.
+
+    edit=True: правим сообщение с кнопками (обычный путь).
+    edit=False: отправляем новое сообщение (после ввода телефона).
+    """
+
+    async def show(text: str, markup=None):
+        if edit:
+            await target.edit_text(text, reply_markup=markup, parse_mode=HTML)
+        else:
+            await target.answer(text, reply_markup=markup, parse_mode=HTML)
+
+    service = await database.get_service(service_id)
+    if service is None:
+        await show("Эта услуга недоступна. Нажмите «💆 Записаться», чтобы выбрать другую.")
+        return
+    _, name, duration, price = service
+    start = datetime.strptime(f"{day_str} {hhmm}", "%Y-%m-%d %H%M")
+    end = start + timedelta(minutes=duration)
+
+    taken_text = "😔 К сожалению, это время только что заняли. Выберите другую дату:"
+
+    # Защита 1: время всё ещё допустимо (не прошло, в рабочие часы, не занято)
+    busy = await database.get_busy_intervals(start.date())
+    if start not in timetable.free_slots(start.date(), duration, busy):
+        await show(taken_text, dates_keyboard(service_id))
+        return
+
+    # Защита 2: проверка и сохранение в одной транзакции
+    booking_id = await database.create_booking(
+        user.id, service_id, start, end, timetable.now_local()
+    )
+    if booking_id is None:
+        await show(taken_text, dates_keyboard(service_id))
+        return
+
+    await show(
+        f"🎉 <b>Вы записаны!</b> Запись №{booking_id}\n\n"
+        f"💆 {escape(name)} ({duration} мин)\n"
+        f"📅 {format_day(start.date())}\n"
+        f"🕒 {start:%H:%M}–{end:%H:%M}\n"
+        f"💰 {price} BYN\n"
+        f"📍 {escape(config.STUDIO_ADDRESS)}\n\n"
+        "Мы напомним о записи заранее. Посмотреть или отменить её можно "
+        "в разделе «📋 Мои записи».",
+        calendar_keyboard(booking_id),
+    )
+    await notify_admin(bot, user, booking_id, name, price, start, end)
 
 
 @router.message(F.text == "💰 Услуги и цены")
@@ -232,9 +303,19 @@ async def choose_date(callback: CallbackQuery):
 
     header = f"💆 <b>{escape(name)}</b>\n📅 {format_day(day)}\n\n"
     if not slots:
+        reason = ""
+        if day == timetable.now_local().date():
+            # Объясняем, почему сегодня не осталось времени
+            reason = (
+                f"\nНа сегодня запись возможна не позднее чем за "
+                f"{config.MIN_NOTICE_MIN} мин до начала, а услуга ({duration} мин) "
+                f"должна закончиться до {config.WORK_END_HOUR}:00."
+            )
         await callback.message.edit_text(
-            header + "😔 На эту дату свободного времени нет.\n"
-            "<i>Выберите другую дату:</i>",
+            header
+            + "😔 На эту дату свободного времени нет."
+            + reason
+            + "\n<i>Выберите другую дату:</i>",
             reply_markup=dates_keyboard(service_id),
             parse_mode=HTML,
         )
@@ -274,45 +355,96 @@ async def choose_slot(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("confirm:"))
-async def confirm_booking(callback: CallbackQuery):
+async def confirm_booking(callback: CallbackQuery, state: FSMContext):
     _, service_id, day_str, hhmm = callback.data.split(":")
     service_id = int(service_id)
-    service = await database.get_service(service_id)
-    if service is None:
-        await callback.answer("Эта услуга недоступна", show_alert=True)
-        return
-    _, name, duration, price = service
-    start = datetime.strptime(f"{day_str} {hhmm}", "%Y-%m-%d %H%M")
-    end = start + timedelta(minutes=duration)
 
-    # Защита 1: время всё ещё допустимо (не прошло, в рабочие часы, не занято)
-    busy = await database.get_busy_intervals(start.date())
-    if start not in timetable.free_slots(start.date(), duration, busy):
-        await show_slot_taken(callback, service_id)
+    # Если телефон обязателен, а его ещё нет, сначала просим номер.
+    # Выбранное время запоминаем и вернёмся к нему после ввода номера
+    if config.PHONE_REQUIRED and not await database.get_phone(callback.from_user.id):
+        await state.set_state(BookingStates.waiting_phone)
+        await state.update_data(service_id=service_id, day=day_str, hhmm=hhmm)
+        await callback.message.answer(
+            PHONE_PROMPT, reply_markup=phone_keyboard(), parse_mode=HTML
+        )
+        await callback.answer()
         return
 
-    # Защита 2: проверка и сохранение в одной транзакции
-    booking_id = await database.create_booking(
-        callback.from_user.id, service_id, start, end, timetable.now_local()
-    )
-    if booking_id is None:
-        await show_slot_taken(callback, service_id)
-        return
-
-    await callback.message.edit_text(
-        f"🎉 <b>Вы записаны!</b> Запись №{booking_id}\n\n"
-        f"💆 {escape(name)} ({duration} мин)\n"
-        f"📅 {format_day(start.date())}\n"
-        f"🕒 {start:%H:%M}–{end:%H:%M}\n"
-        f"💰 {price} BYN\n"
-        f"📍 {escape(config.STUDIO_ADDRESS)}\n\n"
-        "Мы напомним о записи заранее. Посмотреть или отменить её можно "
-        "в разделе «📋 Мои записи».",
-        reply_markup=calendar_keyboard(booking_id),
-        parse_mode=HTML,
+    await finish_booking(
+        callback.message,
+        callback.from_user,
+        callback.bot,
+        service_id,
+        day_str,
+        hhmm,
+        edit=True,
     )
     await callback.answer()
 
-    await notify_admin(
-        callback.bot, callback.from_user, booking_id, name, price, start, end
+
+async def save_phone_and_continue(message: Message, state: FSMContext, phone: str):
+    """Сохраняет номер и продолжает прерванную запись."""
+    data = await state.get_data()
+    await state.clear()
+    await database.set_phone(message.from_user.id, phone)
+    await message.answer(
+        f"✅ Номер {phone} сохранён.",
+        reply_markup=main_menu_for(message.from_user.id),
+    )
+    if not data:
+        # Выбранное время потерялось (например, бот перезапускали)
+        await message.answer("Нажмите «💆 Записаться», чтобы выбрать время.")
+        return
+    await finish_booking(
+        message,
+        message.from_user,
+        message.bot,
+        data["service_id"],
+        data["day"],
+        data["hhmm"],
+        edit=False,
+    )
+
+
+@router.message(BookingStates.waiting_phone, F.text == PHONE_CANCEL)
+async def phone_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "Хорошо, запись не создана. Нажмите «💆 Записаться», когда будете готовы.",
+        reply_markup=main_menu_for(message.from_user.id),
+    )
+
+
+@router.message(BookingStates.waiting_phone, F.contact)
+async def phone_from_contact(message: Message, state: FSMContext):
+    # Принимаем только собственный контакт клиента, а не чужой
+    if message.contact.user_id != message.from_user.id:
+        await message.answer(
+            "Пожалуйста, отправьте свой номер: нажмите кнопку «📱 Отправить мой номер»."
+        )
+        return
+    phone = normalize_phone(message.contact.phone_number)
+    if phone is None:
+        await message.answer("Не получилось распознать номер. Введите его текстом.")
+        return
+    await save_phone_and_continue(message, state, phone)
+
+
+@router.message(BookingStates.waiting_phone, F.text.regexp(PHONE_LIKE))
+async def phone_from_text(message: Message, state: FSMContext):
+    phone = normalize_phone(message.text)
+    if phone is None:
+        await message.answer(
+            "Не получилось распознать номер. Введите его в формате "
+            "+375291234567 или нажмите «📱 Отправить мой номер»."
+        )
+        return
+    await save_phone_and_continue(message, state, phone)
+
+
+@router.message(BookingStates.waiting_phone, F.text, ~F.text.startswith("/"))
+async def phone_not_understood(message: Message):
+    await message.answer(
+        "Это не похоже на номер телефона. Введите его в формате +375291234567, "
+        "нажмите «📱 Отправить мой номер» или «⬅ Отмена»."
     )

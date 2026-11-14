@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta
 from html import escape
+from ui import client_html
 
 from aiogram import F, Router
 from aiogram.types import (
@@ -49,11 +50,12 @@ async def get_movable_booking(callback: CallbackQuery, booking_id: int):
         await callback.answer("Эта запись не найдена или уже отменена", show_alert=True)
         return None
     if booking[4] - timetable.now_local() < timedelta(hours=config.CANCEL_MIN_HOURS):
-        await callback.answer(
-            f"Перенос возможен не позднее чем за {config.CANCEL_MIN_HOURS} ч. "
-            "до начала. Пожалуйста, позвоните в студию.",
-            show_alert=True,
+        await callback.message.answer(
+            f"⏳ Перенести запись через бота можно не позднее чем за "
+            f"{config.CANCEL_MIN_HOURS} ч. до начала.\n"
+            f"Пожалуйста, позвоните в студию: {config.STUDIO_PHONE}"
         )
+        await callback.answer("Перенос через бота уже недоступен")
         return None
     return booking
 
@@ -201,13 +203,14 @@ async def do_move(callback: CallbackQuery):
     await callback.answer()
 
     user = callback.from_user
-    username = f" (@{user.username})" if user.username else ""
+    phone = await database.get_phone(user.id)
     await send_to_admin(
         callback.bot,
-        f"🔁 Клиент перенёс запись №{booking_id}\n\n"
-        f"👤 {user.full_name}{username}\n"
-        f"💆 {name}\n"
+        f"🔁 <b>Клиент перенёс запись №{booking_id}</b>\n\n"
+        f"👤 {client_html(user.id, user.full_name, user.username, phone)}\n"
+        f"💆 {escape(name)}\n"
         f"❌ Было: {format_day(start.date())}, {start:%H:%M}–{end:%H:%M}\n"
         f"✅ Стало: {format_day(new_start.date())}, "
         f"{new_start:%H:%M}–{new_end:%H:%M}",
+        parse_mode=HTML,
     )
