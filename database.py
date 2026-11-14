@@ -518,3 +518,48 @@ async def get_first_visit_dates() -> dict[int, datetime]:
         )
         rows = await cursor.fetchall()
     return {user_id: parse_dt(start) for user_id, start in rows}
+
+async def get_export_rows(from_dt: datetime, to_dt: datetime):
+    """Записи для выгрузки в таблицу (начало в периоде [from_dt, to_dt)).
+
+    Возвращает (id, начало, конец, услуга, цена, клиент, username, телефон,
+    статус, создана).
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT b.id, b.start_at, b.end_at, s.name, COALESCE(b.price, s.price), "
+            "u.full_name, u.username, u.phone, b.status, b.created_at "
+            "FROM bookings b "
+            "JOIN services s ON s.id = b.service_id "
+            "LEFT JOIN users u ON u.user_id = b.user_id "
+            "WHERE b.start_at >= ? AND b.start_at < ? "
+            "ORDER BY b.start_at",
+            (from_dt.strftime(DT_FORMAT), to_dt.strftime(DT_FORMAT)),
+        )
+        rows = await cursor.fetchall()
+    return [
+        (
+            booking_id,
+            parse_dt(start),
+            parse_dt(end),
+            service,
+            price,
+            full_name,
+            username,
+            phone,
+            status,
+            created,
+        )
+        for (
+            booking_id,
+            start,
+            end,
+            service,
+            price,
+            full_name,
+            username,
+            phone,
+            status,
+            created,
+        ) in rows
+    ]

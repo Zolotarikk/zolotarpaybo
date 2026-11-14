@@ -44,6 +44,7 @@ def panel_keyboard() -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton(text="🗓 Выбрать другую дату", callback_data="adm:dates")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stm")],
+        [InlineKeyboardButton(text="📥 Выгрузить записи в Excel", callback_data="adm:exm")],
         [InlineKeyboardButton(text="🚫 Закрыть время", callback_data="adm:bl")],
         [InlineKeyboardButton(text="🔓 Закрытое время", callback_data="adm:ul")],
     ]
